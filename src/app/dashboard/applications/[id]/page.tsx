@@ -21,10 +21,7 @@ type ApplicationRow = {
     submitted_at: string | null;
     decided_at: string | null;
 
-    colleges?: {
-        id: string;
-        name: string;
-    } | null;
+    colleges: { id: string; name: string } | null;
 };
 
 type TaskRow = {
@@ -85,7 +82,19 @@ export default function ApplicationDetailPage() {
 
             if (appError) throw appError;
 
-            const a = appData as ApplicationRow;
+            // appData comes from Supabase
+            const raw = appData as any;
+
+            // Supabase may return `colleges` as an object OR an array.
+            // Normalize to a single object (or null).
+            const college =
+                Array.isArray(raw.colleges) ? raw.colleges[0] ?? null : raw.colleges ?? null;
+
+            const a: ApplicationRow = {
+                ...raw,
+                colleges: college,
+            };
+
             setApp(a);
 
             // hydrate edit form from DB

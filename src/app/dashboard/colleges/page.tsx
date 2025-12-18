@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase/browser";
 import { getUserOrThrow } from "@/lib/auth/getUser";
 import { useRouter } from "next/navigation";
@@ -35,6 +35,11 @@ type School = {
     vibe_tags: string[] | null;
     lat?: number | null;
     lng?: number | null;
+
+    // NEW
+    logo_url?: string | null;
+    primary_color?: string | null;
+    secondary_color?: string | null;
 };
 
 type MySchoolRow = {
@@ -139,16 +144,30 @@ function CountPill({
         </button>
     );
 }
+
+// hex -> rgba
+function hexToRgba(hex: string, alpha: number) {
+    const h = hex.trim().replace("#", "");
+    if (![3, 6].includes(h.length)) return `rgba(0,0,0,0)`;
+    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
+    if ([r, g, b].some((x) => Number.isNaN(x))) return `rgba(0,0,0,0)`;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 // ----------------------------------
 
 function SortableMySchoolRow({
     row,
     onRemove,
     dragEnabled,
+    onPatch,
 }: {
     row: MySchoolRow;
     onRemove: (id: string) => void;
     dragEnabled: boolean;
+    onPatch: (id: string, patch: Partial<MySchoolRow>) => Promise<void>;
 }) {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
         useSortable({ id: row.id, disabled: !dragEnabled });
@@ -161,22 +180,58 @@ function SortableMySchoolRow({
 
     const s = row.schools;
 
+    // local editable state for inputs (so typing feels good)
+    const [localNotes, setLocalNotes] = useState(row.notes ?? "");
+    const [localPrestige, setLocalPrestige] = useState(row.prestige?.toString() ?? "");
+    const [localEnvFit, setLocalEnvFit] = useState(row.env_fit?.toString() ?? "");
+    const [localLocationFit, setLocalLocationFit] = useState(row.location_fit?.toString() ?? "");
+    const [localVibeFit, setLocalVibeFit] = useState(row.vibe_fit?.toString() ?? "");
+
+    useEffect(() => {
+        setLocalNotes(row.notes ?? "");
+        setLocalPrestige(row.prestige?.toString() ?? "");
+        setLocalEnvFit(row.env_fit?.toString() ?? "");
+        setLocalLocationFit(row.location_fit?.toString() ?? "");
+        setLocalVibeFit(row.vibe_fit?.toString() ?? "");
+    }, [row.id, row.notes, row.prestige, row.env_fit, row.location_fit, row.vibe_fit]);
+
+    const tint = s?.primary_color ? hexToRgba(s.primary_color, 0.08) : "transparent";
+    const borderTint = s?.primary_color ? hexToRgba(s.primary_color, 0.18) : undefined;
+
+    async function saveRatingsOnBlur() {
+        await onPatch(row.id, {
+            prestige: clampRating(localPrestige) as any,
+            env_fit: clampRating(localEnvFit) as any,
+            location_fit: clampRating(localLocationFit) as any,
+            vibe_fit: clampRating(localVibeFit) as any,
+        });
+    }
+
+    async function saveNotesOnBlur() {
+        const trimmed = localNotes.trim();
+        await onPatch(row.id, { notes: trimmed ? trimmed : null });
+    }
+
     return (
         <li
             ref={setNodeRef}
-            style={style}
-            className="py-3 bg-white hover:bg-gray-50 transition-colors"
+            style={{
+                ...style,
+                backgroundColor: tint,
+                borderColor: borderTint,
+            }}
+            className="py-3 px-3 border rounded-xl hover:opacity-[0.98] transition"
         >
             <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                         {/* Drag handle */}
                         <button
                             type="button"
                             className={[
-                                "select-none rounded-lg border px-2 py-1 text-xs text-gray-700",
+                                "select-none rounded-lg border px-2 py-1 text-xs text-gray-700 bg-white/70",
                                 dragEnabled
-                                    ? "cursor-grab active:cursor-grabbing hover:bg-gray-50"
+                                    ? "cursor-grab active:cursor-grabbing hover:bg-white"
                                     : "cursor-not-allowed opacity-50",
                             ].join(" ")}
                             {...(dragEnabled ? attributes : {})}
@@ -195,29 +250,131 @@ function SortableMySchoolRow({
                             #{row.rank}
                         </span>
 
+                        {/* Logo */}
+                        {s?.logo_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                                src={s.logo_url}
+                                alt={`${s?.name ?? "School"} logo`}
+                                className="h-6 w-6 rounded bg-white object-contain border"
+                                loading="lazy"
+                            />
+                        ) : null}
+
                         <Link href={`/dashboard/colleges/${row.id}`} className="font-medium underline">
                             {s?.name ?? "Unknown school"}
                         </Link>
 
-                        <Pill kind="status" value={row.status} />
-                        {row.ranking_bucket && <Pill kind="bucket" value={row.ranking_bucket} />}
-                        {!row.ranking_bucket && <Pill kind="bucket" value="unbucketed" label="Unbucketed" />}
+                        {/* Editable status */}
+                        <select
+                            className="rounded-full border px-2 py-0.5 text-xs bg-white/70 hover:bg-white"
+                            value={row.status}
+                            onChange={(e) => onPatch(row.id, { status: e.target.value })}
+                            title="Status"
+                        >
+                            <option>Considering</option>
+                            <option>Building</option>
+                            <option>Ready</option>
+                            <option>Submitted</option>
+                            <option>Waiting</option>
+                            <option>Decision</option>
+                        </select>
 
+                        {/* Editable bucket */}
+                        <select
+                            className="rounded-full border px-2 py-0.5 text-xs bg-white/70 hover:bg-white"
+                            value={row.ranking_bucket ?? ""}
+                            onChange={(e) =>
+                                onPatch(row.id, { ranking_bucket: e.target.value ? e.target.value : null })
+                            }
+                            title="Bucket"
+                        >
+                            <option value="">Unbucketed</option>
+                            <option value="Reach">Reach</option>
+                            <option value="Match">Match</option>
+                            <option value="Safety">Safety</option>
+                        </select>
+
+                        {/* pills (for visual consistency) */}
+                        <Pill kind="status" value={row.status} />
+                        {row.ranking_bucket ? (
+                            <Pill kind="bucket" value={row.ranking_bucket} />
+                        ) : (
+                            <Pill kind="bucket" value="unbucketed" label="Unbucketed" />
+                        )}
                         {s?.env_eng && <Pill kind="env" value={s.env_eng} label={`EnvE: ${s.env_eng}`} />}
                     </div>
 
-                    <div className="text-sm text-gray-600 mt-1">
+                    <div className="text-sm text-gray-700 mt-1">
                         {s?.location_text ?? "—"}
                         {s?.eng_strength ? ` · Eng: ${s.eng_strength}` : ""}
                         {s?.sustainability ? ` · Sustain: ${s.sustainability}` : ""}
                     </div>
 
-                    <div className="text-sm text-gray-600 mt-1">
-                        Ratings: P {row.prestige ?? "—"} · E {row.env_fit ?? "—"} · L{" "}
-                        {row.location_fit ?? "—"} · V {row.vibe_fit ?? "—"}
+                    {/* Editable ratings */}
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-700">
+                        <span className="text-xs text-gray-500">Ratings (0–5):</span>
+
+                        <label className="inline-flex items-center gap-1">
+                            <span className="text-xs text-gray-500">P</span>
+                            <input
+                                className="w-14 rounded-lg border px-2 py-1 bg-white/70"
+                                value={localPrestige}
+                                onChange={(e) => setLocalPrestige(e.target.value)}
+                                onBlur={saveRatingsOnBlur}
+                                inputMode="numeric"
+                                placeholder="—"
+                            />
+                        </label>
+
+                        <label className="inline-flex items-center gap-1">
+                            <span className="text-xs text-gray-500">E</span>
+                            <input
+                                className="w-14 rounded-lg border px-2 py-1 bg-white/70"
+                                value={localEnvFit}
+                                onChange={(e) => setLocalEnvFit(e.target.value)}
+                                onBlur={saveRatingsOnBlur}
+                                inputMode="numeric"
+                                placeholder="—"
+                            />
+                        </label>
+
+                        <label className="inline-flex items-center gap-1">
+                            <span className="text-xs text-gray-500">L</span>
+                            <input
+                                className="w-14 rounded-lg border px-2 py-1 bg-white/70"
+                                value={localLocationFit}
+                                onChange={(e) => setLocalLocationFit(e.target.value)}
+                                onBlur={saveRatingsOnBlur}
+                                inputMode="numeric"
+                                placeholder="—"
+                            />
+                        </label>
+
+                        <label className="inline-flex items-center gap-1">
+                            <span className="text-xs text-gray-500">V</span>
+                            <input
+                                className="w-14 rounded-lg border px-2 py-1 bg-white/70"
+                                value={localVibeFit}
+                                onChange={(e) => setLocalVibeFit(e.target.value)}
+                                onBlur={saveRatingsOnBlur}
+                                inputMode="numeric"
+                                placeholder="—"
+                            />
+                        </label>
                     </div>
 
-                    {row.notes && <p className="mt-2 text-sm text-gray-700">{row.notes}</p>}
+                    {/* Editable notes */}
+                    <div className="mt-2">
+                        <textarea
+                            className="w-full rounded-xl border px-3 py-2 text-sm bg-white/70"
+                            rows={2}
+                            placeholder="Notes…"
+                            value={localNotes}
+                            onChange={(e) => setLocalNotes(e.target.value)}
+                            onBlur={saveNotesOnBlur}
+                        />
+                    </div>
                 </div>
 
                 <div className="flex items-center gap-3 shrink-0">
@@ -292,7 +449,8 @@ export default function CollegesPage() {
           id, school_id, status, ranking_bucket, rank, notes,
           prestige, env_fit, location_fit, vibe_fit, created_at,
           schools:schools (
-            id, name, location_text, website, env_eng, eng_strength, sustainability, vibe_tags, lat, lng
+            id, name, location_text, website, env_eng, eng_strength, sustainability, vibe_tags, lat, lng,
+            logo_url, primary_color, secondary_color
           )
         `
                 )
@@ -340,7 +498,9 @@ export default function CollegesPage() {
         try {
             const { data, error } = await supabase
                 .from("schools")
-                .select("id,name,location_text,website,env_eng,eng_strength,sustainability,vibe_tags,lat,lng")
+                .select(
+                    "id,name,location_text,website,env_eng,eng_strength,sustainability,vibe_tags,lat,lng,logo_url,primary_color,secondary_color"
+                )
                 .ilike("name", `%${trimmed}%`)
                 .order("is_seeded", { ascending: false })
                 .order("name", { ascending: true })
@@ -425,12 +585,7 @@ export default function CollegesPage() {
                 is_seeded: false,
             };
 
-            const { data, error } = await supabase
-                .from("schools")
-                .insert(payload)
-                .select("id")
-                .single();
-
+            const { data, error } = await supabase.from("schools").insert(payload).select("id").single();
             if (error) throw error;
 
             // auto-select newly created school for immediate add-to-list
@@ -458,16 +613,40 @@ export default function CollegesPage() {
 
     async function persistRanks(next: MySchoolRow[]) {
         const results = await Promise.all(
-            next.map((r, idx) =>
-                supabase
-                    .from("my_schools")
-                    .update({ rank: idx + 1 })
-                    .eq("id", r.id)
-            )
+            next.map((r, idx) => supabase.from("my_schools").update({ rank: idx + 1 }).eq("id", r.id))
         );
 
         const firstError = results.find((r) => r.error)?.error;
         if (firstError) throw firstError;
+    }
+
+    // Inline update for editable fields
+    async function patchMySchool(id: string, patch: Partial<MySchoolRow>) {
+        setError(null);
+
+        // optimistic update
+        setMyList((prev) => prev.map((r) => (r.id === id ? ({ ...r, ...patch } as MySchoolRow) : r)));
+
+        // translate patch -> DB patch
+        const dbPatch: any = {};
+        if ("status" in patch) dbPatch.status = patch.status;
+        if ("ranking_bucket" in patch) dbPatch.ranking_bucket = patch.ranking_bucket ?? null;
+        if ("notes" in patch) dbPatch.notes = patch.notes ?? null;
+        if ("prestige" in patch) dbPatch.prestige = patch.prestige ?? null;
+        if ("env_fit" in patch) dbPatch.env_fit = patch.env_fit ?? null;
+        if ("location_fit" in patch) dbPatch.location_fit = patch.location_fit ?? null;
+        if ("vibe_fit" in patch) dbPatch.vibe_fit = patch.vibe_fit ?? null;
+
+        // If patch has nothing relevant, bail
+        if (Object.keys(dbPatch).length === 0) return;
+
+        const { error } = await supabase.from("my_schools").update(dbPatch).eq("id", id);
+
+        if (error) {
+            // revert by reloading source-of-truth
+            setError(error.message ?? "Failed to save changes");
+            await loadMyList();
+        }
     }
 
     // Derived list for display
@@ -533,10 +712,7 @@ export default function CollegesPage() {
                 </div>
 
                 <div className="flex items-center gap-3">
-                    <Link
-                        href="/dashboard/map"
-                        className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
-                    >
+                    <Link href="/dashboard/map" className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50">
                         View map
                     </Link>
                 </div>
@@ -567,40 +743,20 @@ export default function CollegesPage() {
                 </div>
 
                 <div className="mt-3 flex flex-wrap gap-2">
-                    <CountPill
-                        bucket="Reach"
-                        count={counts.reach}
-                        onClick={() => setFilterBucket("Reach")}
-                    />
-                    <CountPill
-                        bucket="Match"
-                        count={counts.match}
-                        onClick={() => setFilterBucket("Match")}
-                    />
-                    <CountPill
-                        bucket="Safety"
-                        count={counts.safety}
-                        onClick={() => setFilterBucket("Safety")}
-                    />
-                    <CountPill
-                        bucket="Unbucketed"
-                        count={counts.unbucketed}
-                        onClick={() => setFilterBucket("")}
-                    />
+                    <CountPill bucket="Reach" count={counts.reach} onClick={() => setFilterBucket("Reach")} />
+                    <CountPill bucket="Match" count={counts.match} onClick={() => setFilterBucket("Match")} />
+                    <CountPill bucket="Safety" count={counts.safety} onClick={() => setFilterBucket("Safety")} />
+                    <CountPill bucket="Unbucketed" count={counts.unbucketed} onClick={() => setFilterBucket("")} />
                 </div>
 
-                <div className="mt-3 text-xs text-gray-500">
-                    Tip: click a bucket to filter your list to that category.
-                </div>
+                <div className="mt-3 text-xs text-gray-500">Tip: click a bucket to filter your list to that category.</div>
             </div>
 
             {/* Add a school (collapsed by default) */}
             <details className="rounded-2xl border bg-white p-4 shadow-sm" open={false}>
                 <summary className="cursor-pointer font-semibold select-none">
                     Add a school{" "}
-                    <span className="text-sm font-normal text-gray-600">
-                        (search catalog / add custom)
-                    </span>
+                    <span className="text-sm font-normal text-gray-600">(search catalog / add custom)</span>
                 </summary>
 
                 <div className="mt-4 space-y-3">
@@ -625,6 +781,8 @@ export default function CollegesPage() {
                                 <div className="mt-2 rounded-xl border overflow-hidden">
                                     {results.map((s) => {
                                         const active = selectedSchoolId === s.id;
+                                        const tint = s?.primary_color ? hexToRgba(s.primary_color, 0.08) : "transparent";
+
                                         return (
                                             <button
                                                 key={s.id}
@@ -632,16 +790,20 @@ export default function CollegesPage() {
                                                 onClick={() => setSelectedSchoolId(s.id)}
                                                 className={`w-full text-left px-3 py-2 border-b last:border-b-0 hover:bg-gray-50 ${active ? "bg-gray-50" : ""
                                                     }`}
+                                                style={{ backgroundColor: active ? tint : undefined }}
                                             >
                                                 <div className="font-medium flex items-center gap-2 flex-wrap">
-                                                    {s.name}
-                                                    {s.env_eng ? (
-                                                        <Pill
-                                                            kind="env"
-                                                            value={s.env_eng}
-                                                            label={`EnvE: ${s.env_eng}`}
+                                                    {s.logo_url ? (
+                                                        // eslint-disable-next-line @next/next/no-img-element
+                                                        <img
+                                                            src={s.logo_url}
+                                                            alt={`${s.name} logo`}
+                                                            className="h-5 w-5 rounded bg-white object-contain border"
+                                                            loading="lazy"
                                                         />
                                                     ) : null}
+                                                    {s.name}
+                                                    {s.env_eng ? <Pill kind="env" value={s.env_eng} label={`EnvE: ${s.env_eng}`} /> : null}
                                                 </div>
                                                 <div className="text-sm text-gray-600">
                                                     {s.location_text ?? "—"}
@@ -655,11 +817,7 @@ export default function CollegesPage() {
                         </div>
 
                         <form onSubmit={addSelectedToMyList} className="space-y-3">
-                            <select
-                                className="w-full rounded-xl border px-3 py-2"
-                                value={status}
-                                onChange={(e) => setStatus(e.target.value)}
-                            >
+                            <select className="w-full rounded-xl border px-3 py-2" value={status} onChange={(e) => setStatus(e.target.value)}>
                                 <option>Considering</option>
                                 <option>Building</option>
                                 <option>Ready</option>
@@ -668,11 +826,7 @@ export default function CollegesPage() {
                                 <option>Decision</option>
                             </select>
 
-                            <select
-                                className="w-full rounded-xl border px-3 py-2"
-                                value={bucket}
-                                onChange={(e) => setBucket(e.target.value)}
-                            >
+                            <select className="w-full rounded-xl border px-3 py-2" value={bucket} onChange={(e) => setBucket(e.target.value)}>
                                 <option value="">Bucket (optional)</option>
                                 <option value="Reach">Reach</option>
                                 <option value="Match">Match</option>
@@ -680,30 +834,10 @@ export default function CollegesPage() {
                             </select>
 
                             <div className="grid grid-cols-2 gap-2">
-                                <input
-                                    className="rounded-xl border px-3 py-2"
-                                    placeholder="Prestige (0–5)"
-                                    value={prestige}
-                                    onChange={(e) => setPrestige(e.target.value)}
-                                />
-                                <input
-                                    className="rounded-xl border px-3 py-2"
-                                    placeholder="Env fit (0–5)"
-                                    value={envFit}
-                                    onChange={(e) => setEnvFit(e.target.value)}
-                                />
-                                <input
-                                    className="rounded-xl border px-3 py-2"
-                                    placeholder="Location (0–5)"
-                                    value={locationFit}
-                                    onChange={(e) => setLocationFit(e.target.value)}
-                                />
-                                <input
-                                    className="rounded-xl border px-3 py-2"
-                                    placeholder="Vibe (0–5)"
-                                    value={vibeFit}
-                                    onChange={(e) => setVibeFit(e.target.value)}
-                                />
+                                <input className="rounded-xl border px-3 py-2" placeholder="Prestige (0–5)" value={prestige} onChange={(e) => setPrestige(e.target.value)} />
+                                <input className="rounded-xl border px-3 py-2" placeholder="Env fit (0–5)" value={envFit} onChange={(e) => setEnvFit(e.target.value)} />
+                                <input className="rounded-xl border px-3 py-2" placeholder="Location (0–5)" value={locationFit} onChange={(e) => setLocationFit(e.target.value)} />
+                                <input className="rounded-xl border px-3 py-2" placeholder="Vibe (0–5)" value={vibeFit} onChange={(e) => setVibeFit(e.target.value)} />
                             </div>
 
                             <textarea
@@ -714,9 +848,7 @@ export default function CollegesPage() {
                                 rows={3}
                             />
 
-                            <button className="w-full rounded-xl bg-black text-white px-4 py-2">
-                                Add to My List
-                            </button>
+                            <button className="w-full rounded-xl bg-black text-white px-4 py-2">Add to My List</button>
                         </form>
                     </div>
 
@@ -725,10 +857,7 @@ export default function CollegesPage() {
                             Can’t find a school? Add a custom one
                         </summary>
 
-                        <form
-                            onSubmit={addCustomSchoolToCatalog}
-                            className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3"
-                        >
+                        <form onSubmit={addCustomSchoolToCatalog} className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
                             <input
                                 className="rounded-xl border px-3 py-2"
                                 placeholder="School name (required)"
@@ -750,9 +879,7 @@ export default function CollegesPage() {
                             />
 
                             <div className="md:col-span-3">
-                                <button className="rounded-xl border px-4 py-2 hover:bg-gray-50">
-                                    Add to catalog & select it
-                                </button>
+                                <button className="rounded-xl border px-4 py-2 hover:bg-gray-50">Add to catalog & select it</button>
                             </div>
                         </form>
                     </details>
@@ -766,41 +893,25 @@ export default function CollegesPage() {
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div>
                         <h2 className="font-semibold">My List</h2>
-                        <p className="text-sm text-gray-600">
-                            {dragEnabled
-                                ? "Drag ↕ to reorder."
-                                : "To reorder: set Sort = Rank and clear filters."}
-                        </p>
+                        <p className="text-sm text-gray-600">{dragEnabled ? "Drag ↕ to reorder." : "To reorder: set Sort = Rank and clear filters."}</p>
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap">
-                        <select
-                            className="rounded-xl border px-3 py-2 text-sm"
-                            value={filterBucket}
-                            onChange={(e) => setFilterBucket(e.target.value)}
-                        >
+                        <select className="rounded-xl border px-3 py-2 text-sm" value={filterBucket} onChange={(e) => setFilterBucket(e.target.value)}>
                             <option value="">All buckets</option>
                             <option value="Reach">Reach</option>
                             <option value="Match">Match</option>
                             <option value="Safety">Safety</option>
                         </select>
 
-                        <select
-                            className="rounded-xl border px-3 py-2 text-sm"
-                            value={filterEnv}
-                            onChange={(e) => setFilterEnv(e.target.value)}
-                        >
+                        <select className="rounded-xl border px-3 py-2 text-sm" value={filterEnv} onChange={(e) => setFilterEnv(e.target.value)}>
                             <option value="">All EnvE</option>
                             <option value="strong">EnvE strong</option>
                             <option value="available">EnvE available</option>
                             <option value="none">No EnvE</option>
                         </select>
 
-                        <select
-                            className="rounded-xl border px-3 py-2 text-sm"
-                            value={sortBy}
-                            onChange={(e) => setSortBy(e.target.value)}
-                        >
+                        <select className="rounded-xl border px-3 py-2 text-sm" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
                             <option value="rank">Sort: rank</option>
                             <option value="name">Sort: name</option>
                             <option value="status">Sort: status</option>
@@ -824,40 +935,27 @@ export default function CollegesPage() {
                 {loading ? (
                     <p className="mt-3 text-sm text-gray-600">Loading…</p>
                 ) : displayed.length === 0 ? (
-                    <p className="mt-3 text-sm text-gray-600">
-                        No schools match your filters (or you haven’t added any yet).
-                    </p>
+                    <p className="mt-3 text-sm text-gray-600">No schools match your filters (or you haven’t added any yet).</p>
                 ) : sortBy === "rank" ? (
-                    <DndContext
-                        sensors={sensors}
-                        collisionDetection={closestCenter}
-                        onDragEnd={onDragEnd}
-                    >
-                        <SortableContext
-                            items={displayed.map((r) => r.id)}
-                            strategy={verticalListSortingStrategy}
-                        >
-                            <ul className="mt-3 divide-y">
+                    <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+                        <SortableContext items={displayed.map((r) => r.id)} strategy={verticalListSortingStrategy}>
+                            <ul className="mt-3 space-y-2">
                                 {displayed.map((row) => (
                                     <SortableMySchoolRow
                                         key={row.id}
                                         row={row}
                                         onRemove={removeFromMyList}
                                         dragEnabled={dragEnabled}
+                                        onPatch={patchMySchool}
                                     />
                                 ))}
                             </ul>
                         </SortableContext>
                     </DndContext>
                 ) : (
-                    <ul className="mt-3 divide-y">
+                    <ul className="mt-3 space-y-2">
                         {displayed.map((row) => (
-                            <SortableMySchoolRow
-                                key={row.id}
-                                row={row}
-                                onRemove={removeFromMyList}
-                                dragEnabled={false}
-                            />
+                            <SortableMySchoolRow key={row.id} row={row} onRemove={removeFromMyList} dragEnabled={false} onPatch={patchMySchool} />
                         ))}
                     </ul>
                 )}

@@ -1,5 +1,10 @@
 "use client";
 
+function firstOrNull<T>(v: T | T[] | null | undefined): T | null {
+    if (!v) return null;
+    return Array.isArray(v) ? (v[0] ?? null) : v;
+}
+
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -15,14 +20,21 @@ import {
     ResponsiveContainer,
 } from "recharts";
 
+type SchoolMini = { id: string; name: string };
+
+type MySchoolJoin = {
+    id: string;
+    schools: SchoolMini | null;
+};
+
 type AppJoin = {
     id: string;
     decision_type: string | null;
     platform: string | null;
     deadline_date: string | null;
-    status: string;
-    my_school_id: string;
-    my_schools?: { id: string; schools?: { id: string; name: string } | null } | null;
+    status: string | null;
+    my_school_id: string | null;
+    my_schools: MySchoolJoin | null;
 };
 
 type TaskJoin = {
@@ -30,8 +42,8 @@ type TaskJoin = {
     title: string;
     due_date: string | null;
     done: boolean;
-    application_id: string;
-    applications?: AppJoin | null;
+    application_id: string | null;
+    applications: AppJoin | null;
 };
 
 type CalendarCounts = {
@@ -365,7 +377,29 @@ export default function DashboardPage() {
 
         if (taskError) throw taskError;
 
-        const all = (taskData ?? []) as TaskJoin[];
+        const rawTasks = (taskData ?? []) as any[];
+
+        const all: TaskJoin[] = rawTasks.map((t) => {
+            const app = firstOrNull<any>(t.applications);
+            const ms = firstOrNull<any>(app?.my_schools);
+            const school = firstOrNull<any>(ms?.schools);
+
+            return {
+                ...t,
+                applications: app
+                    ? {
+                        ...app,
+                        my_schools: ms
+                            ? {
+                                ...ms,
+                                schools: school ? { id: school.id, name: school.name } : null,
+                            }
+                            : null,
+                    }
+                    : null,
+            };
+        });
+
         const overdue: TaskJoin[] = [];
         const week: TaskJoin[] = [];
         const month: TaskJoin[] = [];

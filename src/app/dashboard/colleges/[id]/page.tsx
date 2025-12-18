@@ -96,6 +96,14 @@ function Pill({
         </span>
     );
 }
+
+function clampRating(v: string | number | null) {
+    if (v === null || v === "") return null;
+    const n = Number(v);
+    if (Number.isNaN(n)) return null;
+    return Math.max(0, Math.min(5, Math.round(n)));
+}
+
 // ----------------------------------
 
 export default function CollegeDetailPage() {
@@ -109,7 +117,18 @@ export default function CollegeDetailPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
-    // form state
+    // Edit mode state
+    const [isEditing, setIsEditing] = useState(false);
+    const [editStatus, setEditStatus] = useState("");
+    const [editBucket, setEditBucket] = useState("");
+    const [editRank, setEditRank] = useState<string>("");
+    const [editNotes, setEditNotes] = useState("");
+    const [editPrestige, setEditPrestige] = useState<string>("");
+    const [editEnvFit, setEditEnvFit] = useState<string>("");
+    const [editLocationFit, setEditLocationFit] = useState<string>("");
+    const [editVibeFit, setEditVibeFit] = useState<string>("");
+
+    // Application form state
     const [platform, setPlatform] = useState("Common App");
     const [decisionType, setDecisionType] = useState("RD");
     const [deadline, setDeadline] = useState("");
@@ -168,6 +187,49 @@ export default function CollegeDetailPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [mySchoolId]);
 
+    function startEditing() {
+        if (!row) return;
+        setEditStatus(row.status || "Considering");
+        setEditBucket(row.ranking_bucket || "");
+        setEditRank(String(row.rank ?? ""));
+        setEditNotes(row.notes || "");
+        setEditPrestige(row.prestige != null ? String(row.prestige) : "");
+        setEditEnvFit(row.env_fit != null ? String(row.env_fit) : "");
+        setEditLocationFit(row.location_fit != null ? String(row.location_fit) : "");
+        setEditVibeFit(row.vibe_fit != null ? String(row.vibe_fit) : "");
+        setIsEditing(true);
+    }
+
+    async function saveChanges() {
+        setError(null);
+        try {
+            const user = await getUserOrThrow();
+            const updates = {
+                status: editStatus,
+                ranking_bucket: editBucket || null,
+                rank: editRank ? Number(editRank) : null,
+                notes: editNotes || null,
+                prestige: clampRating(editPrestige),
+                env_fit: clampRating(editEnvFit),
+                location_fit: clampRating(editLocationFit),
+                vibe_fit: clampRating(editVibeFit),
+            };
+
+            const { error: updateError } = await supabase
+                .from("my_schools")
+                .update(updates)
+                .eq("id", mySchoolId)
+                .eq("owner_id", user.id);
+
+            if (updateError) throw updateError;
+
+            await load();
+            setIsEditing(false);
+        } catch (e: any) {
+            setError(e?.message ?? "Failed to save changes");
+        }
+    }
+
     async function addApplication(e: React.FormEvent) {
         e.preventDefault();
         setError(null);
@@ -177,7 +239,7 @@ export default function CollegeDetailPage() {
 
             const payload = {
                 owner_id: user.id,
-                my_school_id: mySchoolId, // ✅ new link
+                my_school_id: mySchoolId,
                 platform: platform || null,
                 decision_type: decisionType || null,
                 deadline_date: deadline || null,
@@ -209,18 +271,43 @@ export default function CollegeDetailPage() {
 
     return (
         <div className="p-6 space-y-6">
-            {/* Header */}
+            {/* Header / Main Details */}
             <div className="rounded-2xl border bg-white p-4 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
                     <button onClick={() => router.back()} className="text-sm underline text-gray-600">
                         ← Back
                     </button>
 
-                    {school.website ? (
-                        <a href={school.website} target="_blank" rel="noreferrer" className="text-sm underline">
-                            Website
-                        </a>
-                    ) : null}
+                    <div className="flex items-center gap-3">
+                        {school.website ? (
+                            <a href={school.website} target="_blank" rel="noreferrer" className="text-sm underline">
+                                Website
+                            </a>
+                        ) : null}
+                        {isEditing ? (
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => setIsEditing(false)}
+                                    className="text-xs border px-2 py-1 rounded hover:bg-gray-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={saveChanges}
+                                    className="text-xs bg-black text-white px-2 py-1 rounded"
+                                >
+                                    Save
+                                </button>
+                            </div>
+                        ) : (
+                            <button
+                                onClick={startEditing}
+                                className="text-xs border px-3 py-1 rounded hover:bg-gray-50 font-medium"
+                            >
+                                Edit info
+                            </button>
+                        )}
+                    </div>
                 </div>
 
                 <div className="mt-2 flex items-start justify-between gap-3 flex-wrap">
@@ -233,20 +320,113 @@ export default function CollegeDetailPage() {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs rounded-full bg-black text-white px-2 py-0.5">#{row.rank}</span>
-                        <Pill kind="bucket" value={row.ranking_bucket ?? "unbucketed"} label={bucketLabel} />
-                        <Pill kind="status" value={row.status} />
-                        {school.env_eng ? <Pill kind="env" value={school.env_eng} label={`EnvE: ${school.env_eng}`} /> : null}
+                    {!isEditing && (
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs rounded-full bg-black text-white px-2 py-0.5">#{row.rank}</span>
+                            <Pill kind="bucket" value={row.ranking_bucket ?? "unbucketed"} label={bucketLabel} />
+                            <Pill kind="status" value={row.status} />
+                            {school.env_eng ? (
+                                <Pill kind="env" value={school.env_eng} label={`EnvE: ${school.env_eng}`} />
+                            ) : null}
+                        </div>
+                    )}
+                </div>
+
+                {isEditing ? (
+                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
+                        <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+                            <select
+                                className="w-full rounded-md border p-1 text-sm"
+                                value={editStatus}
+                                onChange={(e) => setEditStatus(e.target.value)}
+                            >
+                                <option>Considering</option>
+                                <option>Building</option>
+                                <option>Ready</option>
+                                <option>Submitted</option>
+                                <option>Waiting</option>
+                                <option>Decision</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Bucket</label>
+                            <select
+                                className="w-full rounded-md border p-1 text-sm"
+                                value={editBucket}
+                                onChange={(e) => setEditBucket(e.target.value)}
+                            >
+                                <option value="">Without bucket</option>
+                                <option value="Reach">Reach</option>
+                                <option value="Match">Match</option>
+                                <option value="Safety">Safety</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Rank</label>
+                            <input
+                                type="number"
+                                className="w-full rounded-md border p-1 text-sm"
+                                value={editRank}
+                                onChange={(e) => setEditRank(e.target.value)}
+                            />
+                        </div>
+
+                        <div className="col-span-1 md:col-span-2 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">Prestige (0-5)</label>
+                                <input
+                                    className="w-full rounded-md border p-1 text-sm"
+                                    value={editPrestige}
+                                    onChange={(e) => setEditPrestige(e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">Env Fit (0-5)</label>
+                                <input
+                                    className="w-full rounded-md border p-1 text-sm"
+                                    value={editEnvFit}
+                                    onChange={(e) => setEditEnvFit(e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">Loc Fit (0-5)</label>
+                                <input
+                                    className="w-full rounded-md border p-1 text-sm"
+                                    value={editLocationFit}
+                                    onChange={(e) => setEditLocationFit(e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">Vibe (0-5)</label>
+                                <input
+                                    className="w-full rounded-md border p-1 text-sm"
+                                    value={editVibeFit}
+                                    onChange={(e) => setEditVibeFit(e.target.value)}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="col-span-1 md:col-span-2">
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+                            <textarea
+                                className="w-full rounded-md border p-2 text-sm"
+                                rows={3}
+                                value={editNotes}
+                                onChange={(e) => setEditNotes(e.target.value)}
+                            />
+                        </div>
                     </div>
-                </div>
+                ) : (
+                    <>
+                        <div className="mt-3 text-sm text-gray-600">
+                            Ratings: P {row.prestige ?? "—"} · E {row.env_fit ?? "—"} · L {row.location_fit ?? "—"} · V{" "}
+                            {row.vibe_fit ?? "—"}
+                        </div>
 
-                <div className="mt-3 text-sm text-gray-600">
-                    Ratings: P {row.prestige ?? "—"} · E {row.env_fit ?? "—"} · L {row.location_fit ?? "—"} · V{" "}
-                    {row.vibe_fit ?? "—"}
-                </div>
-
-                {row.notes ? <p className="mt-3 text-sm text-gray-700">{row.notes}</p> : null}
+                        {row.notes ? <p className="mt-3 text-sm text-gray-700">{row.notes}</p> : null}
+                    </>
+                )}
 
                 {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
             </div>

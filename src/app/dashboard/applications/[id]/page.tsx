@@ -7,15 +7,20 @@ import { supabaseBrowser } from "@/lib/supabase/browser";
 import { getUserOrThrow } from "@/lib/auth/getUser";
 
 /**
- * IMPORTANT SCHEMA NOTE (based on your colleges/[id]/page.tsx):
- * - applications belong to a my_schools row via applications.my_school_id
- * - my_schools belong to schools via my_schools.school_id
+ * Schema assumptions (based on your colleges/[id]/page.tsx):
+ * - applications.my_school_id -> my_schools.id
+ * - my_schools.school_id -> schools.id
  *
- * This page therefore:
- * - loads the application by applications.id
- * - joins through my_schools -> schools to show the school name
- * - uses app.my_school_id for the back link to /dashboard/colleges/[mySchoolId]
+ * Supabase join fields can be returned as OBJECT or ARRAY depending on relationship config.
+ * We normalize them so TS stays happy and runtime is consistent.
  */
+
+type SchoolMini = { id: string; name: string };
+
+type MySchoolMini = {
+    id: string;
+    schools: SchoolMini | null;
+};
 
 type ApplicationRow = {
     id: string;
@@ -33,11 +38,7 @@ type ApplicationRow = {
     submitted_at: string | null;
     decided_at: string | null;
 
-    // Joined data for display/back-link context
-    my_schools: {
-        id: string;
-        schools: { id: string; name: string } | null;
-    } | null;
+    my_schools: MySchoolMini | null;
 };
 
 type TaskRow = {
@@ -68,6 +69,46 @@ function isNoRowsError(err: any) {
     const code = String(err?.code ?? "").toLowerCase();
     // Supabase/PostgREST “0 rows” is commonly PGRST116
     return code === "pgrst116" || msg.includes("0 rows") || msg.includes("no rows");
+}
+
+function normalizeJoinOne<T>(value: T | T[] | null | undefined): T | null {
+    if (!value) return null;
+    return Array.isArray(value) ? (value[0] ?? null) : value;
+}
+
+function normalizeApplication(raw: any): ApplicationRow {
+    const mySchoolRaw = normalizeJoinOne<any>(raw?.my_schools);
+    const schoolRaw = normalizeJoinOne<any>(mySchoolRaw?.schools);
+
+    const my_schools: MySchoolMini | null = mySchoolRaw
+        ? {
+            id: String(mySchoolRaw.id),
+            schools: schoolRaw
+                ? {
+                    id: String(schoolRaw.id),
+                    name: String(schoolRaw.name),
+                }
+                : null,
+        }
+        : null;
+
+    return {
+        id: String(raw.id),
+        created_at: String(raw.created_at),
+        owner_id: String(raw.owner_id),
+        my_school_id: String(raw.my_school_id),
+
+        platform: raw.platform ?? null,
+        decision_type: raw.decision_type ?? null,
+        deadline_date: raw.deadline_date ?? null,
+        status: String(raw.status ?? "Not started"),
+        portal_url: raw.portal_url ?? null,
+
+        submitted_at: raw.submitted_at ?? null,
+        decided_at: raw.decided_at ?? null,
+
+        my_schools,
+    };
 }
 
 export default function ApplicationDetailPage() {
@@ -195,7 +236,6 @@ export default function ApplicationDetailPage() {
                 if (fallback.error) throw fallback.error;
 
                 if (fallback.data?.id) {
-                    // Redirect to canonical URL using the real application id
                     router.replace(`/dashboard/applications/${fallback.data.id}`);
                     return;
                 }
@@ -207,9 +247,9 @@ export default function ApplicationDetailPage() {
             }
 
             if (appError) throw appError;
+            if (!appData) throw new Error("No application returned.");
 
-            const a = appData as ApplicationRow;
-
+            const a = normalizeApplication(appData);
             setApp(a);
 
             // hydrate edit form from DB
@@ -247,7 +287,6 @@ export default function ApplicationDetailPage() {
             const user = await getUserOrThrow();
             if (!applicationIdParam) throw new Error("Missing application id in the URL.");
 
-            // Fetch current timestamps so we only set submitted_at/decided_at once
             const { data: current, error: currentErr } = await supabase
                 .from("applications")
                 .select("status,submitted_at,decided_at")
@@ -352,7 +391,6 @@ export default function ApplicationDetailPage() {
             const user = await getUserOrThrow();
 
             const { error } = await supabase.from("tasks").delete().eq("id", taskId).eq("owner_id", user.id);
-
             if (error) throw error;
 
             setTasks((prev) => prev.filter((t) => t.id !== taskId));
@@ -487,12 +525,7 @@ export default function ApplicationDetailPage() {
                         {tasks.map((t) => (
                             <li key={t.id} className="py-3 flex items-start justify-between gap-3">
                                 <label className="flex items-start gap-3 cursor-pointer flex-1">
-                                    <input
-                                        type="checkbox"
-                                        className="mt-1"
-                                        checked={t.done}
-                                        onChange={(e) => toggleTask(t.id, e.target.checked)}
-                                    />
+                                    <input type="checkbox" className="mt-1" checked={t.done} onChange={(e) => toggleTask(t.id, e.target.checked)} />
                                     <div className="flex-1">
                                         <div className={t.done ? "line-through text-gray-500" : "font-medium"}>{t.title}</div>
                                         <div className="text-sm text-gray-600">

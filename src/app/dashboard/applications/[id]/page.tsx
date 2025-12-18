@@ -6,11 +6,23 @@ import Link from "next/link";
 import { supabaseBrowser } from "@/lib/supabase/browser";
 import { getUserOrThrow } from "@/lib/auth/getUser";
 
+/**
+ * IMPORTANT SCHEMA NOTE (based on your colleges/[id]/page.tsx):
+ * - applications belong to a my_schools row via applications.my_school_id
+ * - my_schools belong to schools via my_schools.school_id
+ *
+ * This page therefore:
+ * - loads the application by applications.id
+ * - joins through my_schools -> schools to show the school name
+ * - uses app.my_school_id for the back link to /dashboard/colleges/[mySchoolId]
+ */
+
 type ApplicationRow = {
     id: string;
     created_at: string;
     owner_id: string;
-    college_id: string;
+
+    my_school_id: string;
 
     platform: string | null;
     decision_type: string | null;
@@ -21,7 +33,11 @@ type ApplicationRow = {
     submitted_at: string | null;
     decided_at: string | null;
 
-    colleges: { id: string; name: string } | null;
+    // Joined data for display/back-link context
+    my_schools: {
+        id: string;
+        schools: { id: string; name: string } | null;
+    } | null;
 };
 
 type TaskRow = {
@@ -82,7 +98,26 @@ export default function ApplicationDetailPage() {
         const { data, error: appError } = await supabase
             .from("applications")
             .select(
-                "id,created_at,owner_id,college_id,platform,decision_type,deadline_date,status,portal_url,submitted_at,decided_at,colleges(id,name)"
+                `
+        id,
+        created_at,
+        owner_id,
+        my_school_id,
+        platform,
+        decision_type,
+        deadline_date,
+        status,
+        portal_url,
+        submitted_at,
+        decided_at,
+        my_schools (
+          id,
+          schools (
+            id,
+            name
+          )
+        )
+      `
             )
             .eq("id", id)
             .eq("owner_id", userId)
@@ -91,13 +126,32 @@ export default function ApplicationDetailPage() {
         return { data, error: appError };
     }
 
-    async function fetchLatestApplicationByCollegeId(userId: string, collegeId: string) {
+    async function fetchLatestApplicationByMySchoolId(userId: string, mySchoolId: string) {
         const { data, error: appError } = await supabase
             .from("applications")
             .select(
-                "id,created_at,owner_id,college_id,platform,decision_type,deadline_date,status,portal_url,submitted_at,decided_at,colleges(id,name)"
+                `
+        id,
+        created_at,
+        owner_id,
+        my_school_id,
+        platform,
+        decision_type,
+        deadline_date,
+        status,
+        portal_url,
+        submitted_at,
+        decided_at,
+        my_schools (
+          id,
+          schools (
+            id,
+            name
+          )
+        )
+      `
             )
-            .eq("college_id", collegeId)
+            .eq("my_school_id", mySchoolId)
             .eq("owner_id", userId)
             .order("created_at", { ascending: false })
             .limit(1);
@@ -132,21 +186,20 @@ export default function ApplicationDetailPage() {
 
             const user = await getUserOrThrow();
 
-            // 1) First try: treat route param as applications.id
-            let { data: appData, error: appError } = await fetchApplicationById(user.id, applicationIdParam);
+            // 1) Primary: treat route param as applications.id
+            const { data: appData, error: appError } = await fetchApplicationById(user.id, applicationIdParam);
 
-            // 2) If not found, try treating param as college_id (common bug in link building)
+            // 2) Fallback: if link accidentally passed my_school_id, recover by finding latest app for that my_school_id
             if (appError && isNoRowsError(appError)) {
-                const fallback = await fetchLatestApplicationByCollegeId(user.id, applicationIdParam);
+                const fallback = await fetchLatestApplicationByMySchoolId(user.id, applicationIdParam);
                 if (fallback.error) throw fallback.error;
 
                 if (fallback.data?.id) {
                     // Redirect to canonical URL using the real application id
-                    router.replace(`/application/${fallback.data.id}`);
+                    router.replace(`/dashboard/applications/${fallback.data.id}`);
                     return;
                 }
 
-                // Still nothing
                 setApp(null);
                 setTasks([]);
                 setError("No application found for that id.");
@@ -155,15 +208,7 @@ export default function ApplicationDetailPage() {
 
             if (appError) throw appError;
 
-            const raw = appData as any;
-
-            // Supabase may return `colleges` as an object OR an array. Normalize.
-            const college = Array.isArray(raw?.colleges) ? raw.colleges[0] ?? null : raw?.colleges ?? null;
-
-            const a: ApplicationRow = {
-                ...raw,
-                colleges: college,
-            };
+            const a = appData as ApplicationRow;
 
             setApp(a);
 
@@ -224,7 +269,6 @@ export default function ApplicationDetailPage() {
             };
 
             const nowISO = new Date().toISOString();
-
             if (status === "Submitted" && !prevSubmittedAt) patch.submitted_at = nowISO;
             if (status === "Decided" && !prevDecidedAt) patch.decided_at = nowISO;
 
@@ -321,7 +365,6 @@ export default function ApplicationDetailPage() {
         return <div className="p-6 text-sm text-gray-600">Loading…</div>;
     }
 
-    // ✅ Don’t hide the real error behind “not found”
     if (!app) {
         return (
             <div className="p-6 space-y-2">
@@ -334,8 +377,8 @@ export default function ApplicationDetailPage() {
         );
     }
 
-    const collegeName = app.colleges?.name ?? "College";
-    const backHref = `/dashboard/colleges/${app.college_id}`;
+    const schoolName = app.my_schools?.schools?.name ?? "College";
+    const backHref = `/dashboard/colleges/${app.my_school_id}`;
 
     return (
         <div className="p-6 space-y-6">
@@ -352,7 +395,7 @@ export default function ApplicationDetailPage() {
                 </div>
 
                 <h1 className="text-2xl font-semibold">
-                    {collegeName}: {app.decision_type ?? "—"} application
+                    {schoolName}: {app.decision_type ?? "—"} application
                 </h1>
 
                 <p className="text-sm text-gray-600">
@@ -444,7 +487,12 @@ export default function ApplicationDetailPage() {
                         {tasks.map((t) => (
                             <li key={t.id} className="py-3 flex items-start justify-between gap-3">
                                 <label className="flex items-start gap-3 cursor-pointer flex-1">
-                                    <input type="checkbox" className="mt-1" checked={t.done} onChange={(e) => toggleTask(t.id, e.target.checked)} />
+                                    <input
+                                        type="checkbox"
+                                        className="mt-1"
+                                        checked={t.done}
+                                        onChange={(e) => toggleTask(t.id, e.target.checked)}
+                                    />
                                     <div className="flex-1">
                                         <div className={t.done ? "line-through text-gray-500" : "font-medium"}>{t.title}</div>
                                         <div className="text-sm text-gray-600">

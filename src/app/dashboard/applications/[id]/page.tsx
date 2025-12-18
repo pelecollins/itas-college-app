@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabaseBrowser } from "@/lib/supabase/browser";
@@ -41,11 +41,25 @@ function friendlyDateTime(iso: string | null) {
     return d.toLocaleString();
 }
 
+function normalizeParamId(raw: unknown): string | null {
+    if (typeof raw === "string") return raw;
+    if (Array.isArray(raw) && typeof raw[0] === "string") return raw[0];
+    return null;
+}
+
+function isNoRowsError(err: any) {
+    const msg = String(err?.message ?? "").toLowerCase();
+    const code = String(err?.code ?? "").toLowerCase();
+    // Supabase/PostgREST “0 rows” is commonly PGRST116
+    return code === "pgrst116" || msg.includes("0 rows") || msg.includes("no rows");
+}
+
 export default function ApplicationDetailPage() {
     const supabase = useMemo(() => supabaseBrowser(), []);
     const router = useRouter();
     const params = useParams();
-    const applicationId = params.id as string;
+
+    const applicationIdParam = normalizeParamId((params as any)?.id);
 
     const [app, setApp] = useState<ApplicationRow | null>(null);
     const [tasks, setTasks] = useState<TaskRow[]>([]);
@@ -64,31 +78,87 @@ export default function ApplicationDetailPage() {
     const [status, setStatus] = useState("Not started");
     const [portalUrl, setPortalUrl] = useState("");
 
+    async function fetchApplicationById(userId: string, id: string) {
+        const { data, error: appError } = await supabase
+            .from("applications")
+            .select(
+                "id,created_at,owner_id,college_id,platform,decision_type,deadline_date,status,portal_url,submitted_at,decided_at,colleges(id,name)"
+            )
+            .eq("id", id)
+            .eq("owner_id", userId)
+            .single();
+
+        return { data, error: appError };
+    }
+
+    async function fetchLatestApplicationByCollegeId(userId: string, collegeId: string) {
+        const { data, error: appError } = await supabase
+            .from("applications")
+            .select(
+                "id,created_at,owner_id,college_id,platform,decision_type,deadline_date,status,portal_url,submitted_at,decided_at,colleges(id,name)"
+            )
+            .eq("college_id", collegeId)
+            .eq("owner_id", userId)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+        return { data: (data && data[0]) ?? null, error: appError };
+    }
+
+    async function loadTasks(userId: string, appId: string) {
+        const { data: taskData, error: taskError } = await supabase
+            .from("tasks")
+            .select("id,created_at,owner_id,application_id,title,due_date,done,completed_at")
+            .eq("application_id", appId)
+            .eq("owner_id", userId)
+            .order("done", { ascending: true })
+            .order("due_date", { ascending: true });
+
+        if (taskError) throw taskError;
+        setTasks((taskData ?? []) as TaskRow[]);
+    }
+
     async function load() {
         setLoading(true);
         setError(null);
 
         try {
+            if (!applicationIdParam) {
+                setApp(null);
+                setTasks([]);
+                setError("Missing application id in the URL.");
+                return;
+            }
+
             const user = await getUserOrThrow();
 
-            const { data: appData, error: appError } = await supabase
-                .from("applications")
-                .select(
-                    "id,created_at,owner_id,college_id,platform,decision_type,deadline_date,status,portal_url,submitted_at,decided_at,colleges(id,name)"
-                )
-                .eq("id", applicationId)
-                .eq("owner_id", user.id)
-                .single();
+            // 1) First try: treat route param as applications.id
+            let { data: appData, error: appError } = await fetchApplicationById(user.id, applicationIdParam);
+
+            // 2) If not found, try treating param as college_id (common bug in link building)
+            if (appError && isNoRowsError(appError)) {
+                const fallback = await fetchLatestApplicationByCollegeId(user.id, applicationIdParam);
+                if (fallback.error) throw fallback.error;
+
+                if (fallback.data?.id) {
+                    // Redirect to canonical URL using the real application id
+                    router.replace(`/application/${fallback.data.id}`);
+                    return;
+                }
+
+                // Still nothing
+                setApp(null);
+                setTasks([]);
+                setError("No application found for that id.");
+                return;
+            }
 
             if (appError) throw appError;
 
-            // appData comes from Supabase
             const raw = appData as any;
 
-            // Supabase may return `colleges` as an object OR an array.
-            // Normalize to a single object (or null).
-            const college =
-                Array.isArray(raw.colleges) ? raw.colleges[0] ?? null : raw.colleges ?? null;
+            // Supabase may return `colleges` as an object OR an array. Normalize.
+            const college = Array.isArray(raw?.colleges) ? raw.colleges[0] ?? null : raw?.colleges ?? null;
 
             const a: ApplicationRow = {
                 ...raw,
@@ -104,21 +174,14 @@ export default function ApplicationDetailPage() {
             setStatus(a.status ?? "Not started");
             setPortalUrl(a.portal_url ?? "");
 
-            const { data: taskData, error: taskError } = await supabase
-                .from("tasks")
-                .select("id,created_at,owner_id,application_id,title,due_date,done,completed_at")
-                .eq("application_id", applicationId)
-                .eq("owner_id", user.id)
-                .order("done", { ascending: true })
-                .order("due_date", { ascending: true });
-
-            if (taskError) throw taskError;
-            setTasks((taskData ?? []) as TaskRow[]);
+            await loadTasks(user.id, a.id);
         } catch (e: any) {
-            if (String(e?.message).toLowerCase().includes("not signed")) {
+            if (String(e?.message ?? "").toLowerCase().includes("not signed")) {
                 router.replace("/login");
                 return;
             }
+            setApp(null);
+            setTasks([]);
             setError(e?.message ?? "Failed to load application");
         } finally {
             setLoading(false);
@@ -128,7 +191,7 @@ export default function ApplicationDetailPage() {
     useEffect(() => {
         load();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [applicationId]);
+    }, [applicationIdParam]);
 
     async function saveApplicationEdits(e: React.FormEvent) {
         e.preventDefault();
@@ -137,18 +200,18 @@ export default function ApplicationDetailPage() {
 
         try {
             const user = await getUserOrThrow();
+            if (!applicationIdParam) throw new Error("Missing application id in the URL.");
 
             // Fetch current timestamps so we only set submitted_at/decided_at once
             const { data: current, error: currentErr } = await supabase
                 .from("applications")
                 .select("status,submitted_at,decided_at")
-                .eq("id", applicationId)
+                .eq("id", applicationIdParam)
                 .eq("owner_id", user.id)
                 .single();
 
             if (currentErr) throw currentErr;
 
-            const prevStatus = (current?.status as string) ?? "Not started";
             const prevSubmittedAt = (current?.submitted_at as string | null) ?? null;
             const prevDecidedAt = (current?.decided_at as string | null) ?? null;
 
@@ -162,28 +225,17 @@ export default function ApplicationDetailPage() {
 
             const nowISO = new Date().toISOString();
 
-            // set submitted_at the first time we transition into Submitted
-            if (status === "Submitted" && !prevSubmittedAt) {
-                patch.submitted_at = nowISO;
-            }
-
-            // set decided_at the first time we transition into Decided
-            if (status === "Decided" && !prevDecidedAt) {
-                patch.decided_at = nowISO;
-            }
-
-            // Optional: if user moves backwards (Submitted -> In progress), we keep submitted_at.
-            // That preserves the historical first-submit moment.
+            if (status === "Submitted" && !prevSubmittedAt) patch.submitted_at = nowISO;
+            if (status === "Decided" && !prevDecidedAt) patch.decided_at = nowISO;
 
             const { error: updateErr } = await supabase
                 .from("applications")
                 .update(patch)
-                .eq("id", applicationId)
+                .eq("id", applicationIdParam)
                 .eq("owner_id", user.id);
 
             if (updateErr) throw updateErr;
 
-            // reload to refresh timestamps displayed + ensure UI matches DB
             await load();
         } catch (e: any) {
             setError(e?.message ?? "Failed to save application");
@@ -201,10 +253,11 @@ export default function ApplicationDetailPage() {
 
         try {
             const user = await getUserOrThrow();
+            if (!applicationIdParam) throw new Error("Missing application id in the URL.");
 
             const payload = {
                 owner_id: user.id,
-                application_id: applicationId,
+                application_id: applicationIdParam,
                 title: trimmed,
                 due_date: dueDate || null,
                 done: false,
@@ -216,7 +269,6 @@ export default function ApplicationDetailPage() {
 
             setTitle("");
             setDueDate("");
-
             await load();
         } catch (e: any) {
             setError(e?.message ?? "Failed to add task");
@@ -229,8 +281,7 @@ export default function ApplicationDetailPage() {
         try {
             const user = await getUserOrThrow();
 
-            const patch: any = { done: nextDone };
-            patch.completed_at = nextDone ? new Date().toISOString() : null;
+            const patch: any = { done: nextDone, completed_at: nextDone ? new Date().toISOString() : null };
 
             const { error } = await supabase
                 .from("tasks")
@@ -256,11 +307,7 @@ export default function ApplicationDetailPage() {
         try {
             const user = await getUserOrThrow();
 
-            const { error } = await supabase
-                .from("tasks")
-                .delete()
-                .eq("id", taskId)
-                .eq("owner_id", user.id);
+            const { error } = await supabase.from("tasks").delete().eq("id", taskId).eq("owner_id", user.id);
 
             if (error) throw error;
 
@@ -274,8 +321,17 @@ export default function ApplicationDetailPage() {
         return <div className="p-6 text-sm text-gray-600">Loading…</div>;
     }
 
+    // ✅ Don’t hide the real error behind “not found”
     if (!app) {
-        return <div className="p-6 text-sm text-gray-600">Application not found.</div>;
+        return (
+            <div className="p-6 space-y-2">
+                <div className="text-sm text-gray-600">Application not found.</div>
+                {error && <div className="text-sm text-red-600">{error}</div>}
+                <button onClick={() => router.back()} className="text-sm underline text-gray-600">
+                    ← Back
+                </button>
+            </div>
+        );
     }
 
     const collegeName = app.colleges?.name ?? "College";
@@ -327,23 +383,14 @@ export default function ApplicationDetailPage() {
                         <option>Other</option>
                     </select>
 
-                    <select
-                        className="rounded-xl border px-3 py-2"
-                        value={decisionType}
-                        onChange={(e) => setDecisionType(e.target.value)}
-                    >
+                    <select className="rounded-xl border px-3 py-2" value={decisionType} onChange={(e) => setDecisionType(e.target.value)}>
                         <option>ED</option>
                         <option>EA</option>
                         <option>REA</option>
                         <option>RD</option>
                     </select>
 
-                    <input
-                        type="date"
-                        className="rounded-xl border px-3 py-2"
-                        value={deadline}
-                        onChange={(e) => setDeadline(e.target.value)}
-                    />
+                    <input type="date" className="rounded-xl border px-3 py-2" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
 
                     <select className="rounded-xl border px-3 py-2" value={status} onChange={(e) => setStatus(e.target.value)}>
                         <option>Not started</option>
@@ -361,10 +408,7 @@ export default function ApplicationDetailPage() {
                 </div>
 
                 <div className="flex items-center gap-3">
-                    <button
-                        disabled={savingApp}
-                        className="rounded-xl bg-black text-white px-4 py-2 disabled:opacity-60"
-                    >
+                    <button disabled={savingApp} className="rounded-xl bg-black text-white px-4 py-2 disabled:opacity-60">
                         {savingApp ? "Saving…" : "Save changes"}
                     </button>
                     {error && <p className="text-sm text-red-600">{error}</p>}
@@ -400,12 +444,7 @@ export default function ApplicationDetailPage() {
                         {tasks.map((t) => (
                             <li key={t.id} className="py-3 flex items-start justify-between gap-3">
                                 <label className="flex items-start gap-3 cursor-pointer flex-1">
-                                    <input
-                                        type="checkbox"
-                                        className="mt-1"
-                                        checked={t.done}
-                                        onChange={(e) => toggleTask(t.id, e.target.checked)}
-                                    />
+                                    <input type="checkbox" className="mt-1" checked={t.done} onChange={(e) => toggleTask(t.id, e.target.checked)} />
                                     <div className="flex-1">
                                         <div className={t.done ? "line-through text-gray-500" : "font-medium"}>{t.title}</div>
                                         <div className="text-sm text-gray-600">

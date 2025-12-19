@@ -215,7 +215,7 @@ export default function ApplicationDetailPage() {
             }
 
             // IMPORTANT FIX:
-            const user = await getUserOrThrow(supabase);
+            const user = await getUserOrThrow();
 
             // 1) Primary: param is applications.id
             const { data: appData, error: appError } = await fetchApplicationById(user.id, applicationIdParam);
@@ -273,7 +273,7 @@ export default function ApplicationDetailPage() {
         setSavingApp(true);
 
         try {
-            const user = await getUserOrThrow(supabase);
+            const user = await getUserOrThrow();
             if (!app) throw new Error("Missing application.");
 
             const { data: current, error: currentErr } = await supabase
@@ -324,7 +324,7 @@ export default function ApplicationDetailPage() {
         if (!trimmed) return;
 
         try {
-            const user = await getUserOrThrow(supabase);
+            const user = await getUserOrThrow();
             if (!app) throw new Error("Missing application.");
 
             const payload = {
@@ -350,7 +350,7 @@ export default function ApplicationDetailPage() {
     async function toggleTask(taskId: string, nextDone: boolean) {
         setError(null);
         try {
-            const user = await getUserOrThrow(supabase);
+            const user = await getUserOrThrow();
 
             const patch: any = { done: nextDone, completed_at: nextDone ? new Date().toISOString() : null };
 
@@ -375,7 +375,7 @@ export default function ApplicationDetailPage() {
     async function deleteTask(taskId: string) {
         setError(null);
         try {
-            const user = await getUserOrThrow(supabase);
+            const user = await getUserOrThrow();
 
             const { error } = await supabase.from("tasks").delete().eq("id", taskId).eq("owner_id", user.id);
             if (error) throw error;

@@ -86,7 +86,7 @@ export default function CollegeDetailPage() {
         setError(null);
 
         try {
-            const user = await getUserOrThrow(supabase);
+            const user = await getUserOrThrow();
 
             // Load my_schools row + joined school data
             const { data: mySchoolData, error: mySchoolError } = await supabase
@@ -153,7 +153,7 @@ export default function CollegeDetailPage() {
         setError(null);
 
         try {
-            const user = await getUserOrThrow(supabase);
+            const user = await getUserOrThrow();
 
             const payload: any = {
                 status: editStatus,
@@ -196,7 +196,7 @@ export default function CollegeDetailPage() {
     async function createApplication() {
         setError(null);
         try {
-            const user = await getUserOrThrow(supabase);
+            const user = await getUserOrThrow();
 
             const payload = {
                 owner_id: user.id,

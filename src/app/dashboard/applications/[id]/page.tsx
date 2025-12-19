@@ -6,15 +6,6 @@ import Link from "next/link";
 import { supabaseBrowser } from "@/lib/supabase/browser";
 import { getUserOrThrow } from "@/lib/auth/getUser";
 
-/**
- * Schema assumptions (based on your colleges/[id]/page.tsx):
- * - applications.my_school_id -> my_schools.id
- * - my_schools.school_id -> schools.id
- *
- * Supabase join fields can be returned as OBJECT or ARRAY depending on relationship config.
- * We normalize them so TS stays happy and runtime is consistent.
- */
-
 type SchoolMini = { id: string; name: string };
 
 type MySchoolMini = {
@@ -67,7 +58,6 @@ function normalizeParamId(raw: unknown): string | null {
 function isNoRowsError(err: any) {
     const msg = String(err?.message ?? "").toLowerCase();
     const code = String(err?.code ?? "").toLowerCase();
-    // Supabase/PostgREST “0 rows” is commonly PGRST116
     return code === "pgrst116" || msg.includes("0 rows") || msg.includes("no rows");
 }
 
@@ -115,7 +105,6 @@ export default function ApplicationDetailPage() {
     const supabase = useMemo(() => supabaseBrowser(), []);
     const router = useRouter();
     const params = useParams();
-
     const applicationIdParam = normalizeParamId((params as any)?.id);
 
     const [app, setApp] = useState<ApplicationRow | null>(null);
@@ -197,7 +186,7 @@ export default function ApplicationDetailPage() {
             .order("created_at", { ascending: false })
             .limit(1);
 
-        return { data: (data && data[0]) ?? null, error: appError };
+        return { data: (data && (data as any)[0]) ?? null, error: appError };
     }
 
     async function loadTasks(userId: string, appId: string) {
@@ -225,12 +214,13 @@ export default function ApplicationDetailPage() {
                 return;
             }
 
-            const user = await getUserOrThrow();
+            // IMPORTANT FIX:
+            const user = await getUserOrThrow(supabase);
 
-            // 1) Primary: treat route param as applications.id
+            // 1) Primary: param is applications.id
             const { data: appData, error: appError } = await fetchApplicationById(user.id, applicationIdParam);
 
-            // 2) Fallback: if link accidentally passed my_school_id, recover by finding latest app for that my_school_id
+            // 2) Fallback: param is my_school_id (recover)
             if (appError && isNoRowsError(appError)) {
                 const fallback = await fetchLatestApplicationByMySchoolId(user.id, applicationIdParam);
                 if (fallback.error) throw fallback.error;
@@ -252,7 +242,6 @@ export default function ApplicationDetailPage() {
             const a = normalizeApplication(appData);
             setApp(a);
 
-            // hydrate edit form from DB
             setPlatform(a.platform ?? "Common App");
             setDecisionType(a.decision_type ?? "RD");
             setDeadline(a.deadline_date ?? "");
@@ -284,13 +273,13 @@ export default function ApplicationDetailPage() {
         setSavingApp(true);
 
         try {
-            const user = await getUserOrThrow();
-            if (!applicationIdParam) throw new Error("Missing application id in the URL.");
+            const user = await getUserOrThrow(supabase);
+            if (!app) throw new Error("Missing application.");
 
             const { data: current, error: currentErr } = await supabase
                 .from("applications")
                 .select("status,submitted_at,decided_at")
-                .eq("id", applicationIdParam)
+                .eq("id", app.id)
                 .eq("owner_id", user.id)
                 .single();
 
@@ -314,7 +303,7 @@ export default function ApplicationDetailPage() {
             const { error: updateErr } = await supabase
                 .from("applications")
                 .update(patch)
-                .eq("id", applicationIdParam)
+                .eq("id", app.id)
                 .eq("owner_id", user.id);
 
             if (updateErr) throw updateErr;
@@ -335,12 +324,12 @@ export default function ApplicationDetailPage() {
         if (!trimmed) return;
 
         try {
-            const user = await getUserOrThrow();
-            if (!applicationIdParam) throw new Error("Missing application id in the URL.");
+            const user = await getUserOrThrow(supabase);
+            if (!app) throw new Error("Missing application.");
 
             const payload = {
                 owner_id: user.id,
-                application_id: applicationIdParam,
+                application_id: app.id,
                 title: trimmed,
                 due_date: dueDate || null,
                 done: false,
@@ -360,9 +349,8 @@ export default function ApplicationDetailPage() {
 
     async function toggleTask(taskId: string, nextDone: boolean) {
         setError(null);
-
         try {
-            const user = await getUserOrThrow();
+            const user = await getUserOrThrow(supabase);
 
             const patch: any = { done: nextDone, completed_at: nextDone ? new Date().toISOString() : null };
 
@@ -386,9 +374,8 @@ export default function ApplicationDetailPage() {
 
     async function deleteTask(taskId: string) {
         setError(null);
-
         try {
-            const user = await getUserOrThrow();
+            const user = await getUserOrThrow(supabase);
 
             const { error } = await supabase.from("tasks").delete().eq("id", taskId).eq("owner_id", user.id);
             if (error) throw error;
@@ -399,15 +386,13 @@ export default function ApplicationDetailPage() {
         }
     }
 
-    if (loading) {
-        return <div className="p-6 text-sm text-gray-600">Loading…</div>;
-    }
+    if (loading) return <div className="p-6 text-sm text-gray-600">Loading…</div>;
 
     if (!app) {
         return (
             <div className="p-6 space-y-2">
                 <div className="text-sm text-gray-600">Application not found.</div>
-                {error && <div className="text-sm text-red-600">{error}</div>}
+                {error ? <div className="text-sm text-red-600">{error}</div> : null}
                 <button onClick={() => router.back()} className="text-sm underline text-gray-600">
                     ← Back
                 </button>
@@ -416,125 +401,114 @@ export default function ApplicationDetailPage() {
     }
 
     const schoolName = app.my_schools?.schools?.name ?? "College";
-    const backHref = `/dashboard/colleges/${app.my_school_id}`;
 
     return (
-        <div className="p-6 space-y-6">
-            {/* Header */}
-            <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-3">
-                    <button onClick={() => router.back()} className="text-sm underline text-gray-600">
-                        ← Back
-                    </button>
-
-                    <Link href={backHref} className="text-sm underline text-gray-600">
-                        View college
-                    </Link>
-                </div>
-
-                <h1 className="text-2xl font-semibold">
-                    {schoolName}: {app.decision_type ?? "—"} application
-                </h1>
-
-                <p className="text-sm text-gray-600">
-                    Platform: {app.platform ?? "—"} · Deadline: {app.deadline_date ?? "—"} · Status: {app.status}
-                </p>
-
-                {app.portal_url && (
-                    <a href={app.portal_url} target="_blank" rel="noreferrer" className="text-sm underline inline-block">
-                        Open portal
-                    </a>
-                )}
-            </div>
-
-            {/* Application editor */}
-            <form onSubmit={saveApplicationEdits} className="rounded-2xl border bg-white p-4 shadow-sm space-y-3">
-                <div className="flex items-baseline justify-between gap-3">
-                    <h2 className="font-semibold">Application details</h2>
-                    <div className="text-xs text-gray-600">
-                        Submitted: {friendlyDateTime(app.submitted_at)} · Decided: {friendlyDateTime(app.decided_at)}
+        <div className="mx-auto max-w-5xl p-4 md:p-8">
+            <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                    <h1 className="text-2xl font-semibold truncate">{schoolName}</h1>
+                    <div className="text-sm text-gray-600 mt-1">
+                        Created: {friendlyDateTime(app.created_at)}
+                        {app.portal_url ? (
+                            <>
+                                {" · "}
+                                <a className="underline" href={app.portal_url} target="_blank" rel="noreferrer">
+                                    Portal
+                                </a>
+                            </>
+                        ) : null}
                     </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <select className="rounded-xl border px-3 py-2" value={platform} onChange={(e) => setPlatform(e.target.value)}>
-                        <option>Common App</option>
-                        <option>Coalition</option>
-                        <option>School Portal</option>
-                        <option>Other</option>
-                    </select>
-
-                    <select className="rounded-xl border px-3 py-2" value={decisionType} onChange={(e) => setDecisionType(e.target.value)}>
-                        <option>ED</option>
-                        <option>EA</option>
-                        <option>REA</option>
-                        <option>RD</option>
-                    </select>
-
-                    <input type="date" className="rounded-xl border px-3 py-2" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
-
-                    <select className="rounded-xl border px-3 py-2" value={status} onChange={(e) => setStatus(e.target.value)}>
-                        <option>Not started</option>
-                        <option>In progress</option>
-                        <option>Submitted</option>
-                        <option>Decided</option>
-                    </select>
-
-                    <input
-                        className="rounded-xl border px-3 py-2 md:col-span-2"
-                        placeholder="Application portal URL (optional)"
-                        value={portalUrl}
-                        onChange={(e) => setPortalUrl(e.target.value)}
-                    />
-                </div>
-
-                <div className="flex items-center gap-3">
-                    <button disabled={savingApp} className="rounded-xl bg-black text-white px-4 py-2 disabled:opacity-60">
-                        {savingApp ? "Saving…" : "Save changes"}
+                <div className="flex items-center gap-2">
+                    <Link href="/dashboard/colleges" className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50">
+                        Colleges
+                    </Link>
+                    <button className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50" onClick={() => router.back()}>
+                        Back
                     </button>
-                    {error && <p className="text-sm text-red-600">{error}</p>}
                 </div>
-            </form>
+            </div>
 
-            {/* Add task */}
-            <form onSubmit={addTask} className="rounded-2xl border bg-white p-4 shadow-sm space-y-3">
+            {error ? (
+                <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{error}</div>
+            ) : null}
+
+            <div className="mt-6 rounded-2xl border bg-white p-4 md:p-6">
+                <h2 className="font-semibold">Application details</h2>
+
+                <form className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4" onSubmit={saveApplicationEdits}>
+                    <label className="text-sm">
+                        <div className="text-gray-600 mb-1">Platform</div>
+                        <input className="w-full rounded-xl border px-3 py-2" value={platform} onChange={(e) => setPlatform(e.target.value)} />
+                    </label>
+
+                    <label className="text-sm">
+                        <div className="text-gray-600 mb-1">Decision type</div>
+                        <input className="w-full rounded-xl border px-3 py-2" value={decisionType} onChange={(e) => setDecisionType(e.target.value)} />
+                    </label>
+
+                    <label className="text-sm">
+                        <div className="text-gray-600 mb-1">Deadline (YYYY-MM-DD)</div>
+                        <input className="w-full rounded-xl border px-3 py-2" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+                    </label>
+
+                    <label className="text-sm">
+                        <div className="text-gray-600 mb-1">Status</div>
+                        <input className="w-full rounded-xl border px-3 py-2" value={status} onChange={(e) => setStatus(e.target.value)} />
+                    </label>
+
+                    <label className="text-sm md:col-span-2">
+                        <div className="text-gray-600 mb-1">Portal URL</div>
+                        <input className="w-full rounded-xl border px-3 py-2" value={portalUrl} onChange={(e) => setPortalUrl(e.target.value)} />
+                    </label>
+
+                    <div className="md:col-span-2">
+                        <button className="rounded-xl bg-black text-white px-3 py-2 text-sm disabled:opacity-60" disabled={savingApp} type="submit">
+                            {savingApp ? "Saving…" : "Save changes"}
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div className="mt-6 rounded-2xl border bg-white p-4 md:p-6">
                 <h2 className="font-semibold">Tasks</h2>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <input
-                        className="rounded-xl border px-3 py-2 md:col-span-2"
-                        placeholder="Task title (e.g., Draft personal statement)"
-                        value={title}
-                        onChange={(e) => setTitle(e.target.value)}
-                    />
-                    <input type="date" className="rounded-xl border px-3 py-2" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-                </div>
+                <form onSubmit={addTask} className="mt-4 rounded-xl border bg-gray-50 p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <label className="text-sm md:col-span-2">
+                            <div className="text-gray-600 mb-1">Task title</div>
+                            <input className="w-full rounded-xl border px-3 py-2 bg-white" value={title} onChange={(e) => setTitle(e.target.value)} />
+                        </label>
 
-                <div className="flex items-center gap-3">
-                    <button className="rounded-xl bg-black text-white px-4 py-2">Add task</button>
-                    {error && <p className="text-sm text-red-600">{error}</p>}
-                </div>
-            </form>
+                        <label className="text-sm">
+                            <div className="text-gray-600 mb-1">Due date (YYYY-MM-DD)</div>
+                            <input className="w-full rounded-xl border px-3 py-2 bg-white" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+                        </label>
+                    </div>
 
-            {/* Task list */}
-            <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                    <div className="mt-3">
+                        <button className="rounded-xl bg-black text-white px-3 py-2 text-sm" type="submit">
+                            Add task
+                        </button>
+                    </div>
+                </form>
+
                 {tasks.length === 0 ? (
-                    <p className="text-sm text-gray-600">No tasks yet — add your first one above.</p>
+                    <p className="mt-4 text-sm text-gray-600">No tasks yet.</p>
                 ) : (
-                    <ul className="divide-y">
+                    <ul className="mt-4 divide-y">
                         {tasks.map((t) => (
                             <li key={t.id} className="py-3 flex items-start justify-between gap-3">
-                                <label className="flex items-start gap-3 cursor-pointer flex-1">
-                                    <input type="checkbox" className="mt-1" checked={t.done} onChange={(e) => toggleTask(t.id, e.target.checked)} />
-                                    <div className="flex-1">
-                                        <div className={t.done ? "line-through text-gray-500" : "font-medium"}>{t.title}</div>
-                                        <div className="text-sm text-gray-600">
-                                            Due: {t.due_date ?? "—"} · Completed: {friendlyDateTime(t.completed_at)}
-                                        </div>
+                                <button className="text-left min-w-0" onClick={() => toggleTask(t.id, !t.done)} title="Toggle complete">
+                                    <div className="flex items-center gap-2">
+                                        <span className={`inline-flex h-4 w-4 rounded border ${t.done ? "bg-black" : "bg-white"}`} />
+                                        <span className={`font-medium truncate ${t.done ? "line-through text-gray-500" : ""}`}>{t.title}</span>
                                     </div>
-                                </label>
+                                    <div className="text-sm text-gray-600 mt-1">Due: {t.due_date ?? "—"}</div>
+                                </button>
 
-                                <button onClick={() => deleteTask(t.id)} className="text-sm underline text-gray-600">
+                                <button className="text-sm underline text-gray-600 hover:text-black" onClick={() => deleteTask(t.id)}>
                                     Delete
                                 </button>
                             </li>

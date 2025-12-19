@@ -1,11 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase/browser";
 import { useRouter } from "next/navigation";
 
+function getOrigin() {
+    // On the login page, window exists, but this keeps TS happy + avoids edge cases.
+    if (typeof window !== "undefined" && window.location?.origin) return window.location.origin;
+
+    // Fallback for safety (shouldn't really be used on this client page)
+    return process.env.NEXT_PUBLIC_SITE_URL ?? "https://itas-college-app.vercel.app";
+}
+
 export default function LoginPage() {
-    const supabase = supabaseBrowser();
+    const supabase = useMemo(() => supabaseBrowser(), []);
     const router = useRouter();
 
     const [email, setEmail] = useState("");
@@ -13,10 +21,20 @@ export default function LoginPage() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    // If a session already exists (e.g., after clicking magic link), go to dashboard
+    // If a session already exists, go to dashboard
     useEffect(() => {
+        let mounted = true;
+
         (async () => {
-            const { data } = await supabase.auth.getSession();
+            const { data, error } = await supabase.auth.getSession();
+            if (!mounted) return;
+
+            if (error) {
+                // Not fatal — just show error.
+                setError(error.message);
+                return;
+            }
+
             if (data.session) router.replace("/dashboard");
         })();
 
@@ -24,19 +42,24 @@ export default function LoginPage() {
             if (session) router.replace("/dashboard");
         });
 
-        return () => sub.subscription.unsubscribe();
+        return () => {
+            mounted = false;
+            sub.subscription.unsubscribe();
+        };
     }, [router, supabase]);
 
     async function handleSignIn(e: React.FormEvent) {
         e.preventDefault();
         setLoading(true);
         setError(null);
+        setSent(false);
+
+        const origin = getOrigin();
 
         const { error } = await supabase.auth.signInWithOtp({
             email,
             options: {
-                // This is still good to keep, even if Supabase sometimes bounces to Site URL
-                emailRedirectTo: `${window.location.origin}/auth/callback`,
+                emailRedirectTo: `${origin}/auth/callback`,
             },
         });
 
@@ -49,9 +72,7 @@ export default function LoginPage() {
         <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
             <div className="w-full max-w-sm rounded-2xl border bg-white p-6 shadow-sm">
                 <h1 className="text-xl font-semibold">Sign in</h1>
-                <p className="mt-1 text-sm text-gray-600">
-                    We’ll email you a magic link to sign in.
-                </p>
+                <p className="mt-1 text-sm text-gray-600">We’ll email you a magic link to sign in.</p>
 
                 <form onSubmit={handleSignIn} className="mt-4 space-y-3">
                     <input
@@ -72,13 +93,8 @@ export default function LoginPage() {
                     </button>
                 </form>
 
-                {sent && (
-                    <p className="mt-3 text-sm text-green-700">
-                        Check your email for the sign-in link.
-                    </p>
-                )}
-
-                {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+                {sent ? <p className="mt-3 text-sm text-green-700">Check your email for the sign-in link.</p> : null}
+                {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
             </div>
         </div>
     );

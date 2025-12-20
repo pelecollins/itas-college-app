@@ -5,10 +5,7 @@ import { supabaseBrowser } from "@/lib/supabase/browser";
 import { useRouter } from "next/navigation";
 
 function getOrigin() {
-    // On the login page, window exists, but this keeps TS happy + avoids edge cases.
     if (typeof window !== "undefined" && window.location?.origin) return window.location.origin;
-
-    // Fallback for safety (shouldn't really be used on this client page)
     return process.env.NEXT_PUBLIC_SITE_URL ?? "https://itas-college-app.vercel.app";
 }
 
@@ -21,7 +18,6 @@ export default function LoginPage() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    // If a session already exists, go to dashboard
     useEffect(() => {
         let mounted = true;
 
@@ -30,7 +26,6 @@ export default function LoginPage() {
             if (!mounted) return;
 
             if (error) {
-                // Not fatal — just show error.
                 setError(error.message);
                 return;
             }
@@ -59,6 +54,8 @@ export default function LoginPage() {
         const { error } = await supabase.auth.signInWithOtp({
             email,
             options: {
+                // Ensure the callback hits your server route with ?code=...
+                // (PKCE is the recommended flow for magic links in modern Supabase)
                 emailRedirectTo: `${origin}/auth/callback`,
             },
         });

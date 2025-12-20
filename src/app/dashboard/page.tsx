@@ -171,13 +171,17 @@ function urgencyForDue(dueISO: string): "overdue" | "soon" | "later" {
 function DashboardCalendar({
     month,
     countsByDay,
+    selectedISO,
     onPrev,
     onNext,
+    onSelectDate,
 }: {
     month: Date;
     countsByDay: Record<string, CalendarCounts>;
+    selectedISO: string | null;
     onPrev: () => void;
     onNext: () => void;
+    onSelectDate: (iso: string) => void;
 }) {
     const todayISO = isoDate(new Date());
     const monthStart = startOfMonth(month);
@@ -222,34 +226,42 @@ function DashboardCalendar({
                     const inMonth = d.getMonth() === monthStart.getMonth();
                     const c = countsByDay[dISO];
                     const isToday = dISO === todayISO;
+                    const isSelected = selectedISO === dISO;
+
+                    const hasAny = (c?.tasksDue ?? 0) > 0 || (c?.appsDue ?? 0) > 0;
 
                     return (
-                        <div
+                        <button
                             key={dISO}
+                            type="button"
+                            onClick={() => onSelectDate(dISO)}
                             className={[
-                                "rounded-xl border p-2 min-h-[64px]",
-                                inMonth ? "bg-white" : "bg-gray-50 opacity-70",
+                                "rounded-xl border p-2 min-h-[64px] text-left transition-colors",
+                                inMonth ? "bg-white hover:bg-gray-50" : "bg-gray-50 opacity-70 hover:opacity-100",
                                 isToday ? "ring-2 ring-black" : "",
+                                isSelected ? "outline outline-2 outline-offset-0 outline-black" : "",
                             ].join(" ")}
+                            aria-label={`Select ${dISO}`}
                         >
                             <div className="flex items-center justify-between">
                                 <div className="text-xs text-gray-700">{d.getDate()}</div>
-                                {c?.tasksDue || c?.appsDue ? (
+                                {hasAny ? (
                                     <div className="text-[10px] text-gray-600">
-                                        {c.tasksDue ? `🧩${c.tasksDue}` : ""} {c.appsDue ? `🎓${c.appsDue}` : ""}
+                                        {c?.tasksDue ? `🧩${c.tasksDue}` : ""}{" "}
+                                        {c?.appsDue ? `🎓${c.appsDue}` : ""}
                                     </div>
                                 ) : null}
                             </div>
 
-                            {c?.tasksDue || c?.appsDue ? (
+                            {hasAny ? (
                                 <div className="mt-2 text-[11px] text-gray-700 space-y-1">
-                                    {c.tasksDue ? <div>{c.tasksDue} task due</div> : null}
-                                    {c.appsDue ? <div>{c.appsDue} app deadline</div> : null}
+                                    {c?.tasksDue ? <div>{c.tasksDue} task due</div> : null}
+                                    {c?.appsDue ? <div>{c.appsDue} app deadline</div> : null}
                                 </div>
                             ) : (
                                 <div className="mt-2 text-[11px] text-gray-400">—</div>
                             )}
-                        </div>
+                        </button>
                     );
                 })}
             </div>
@@ -282,6 +294,12 @@ export default function DashboardPage() {
     const [calendarMonth, setCalendarMonth] = useState<Date>(() => startOfMonth(new Date()));
     const [calendarCountsByDay, setCalendarCountsByDay] = useState<Record<string, CalendarCounts>>({});
 
+    // NEW: day selection + day agenda
+    const [selectedDayISO, setSelectedDayISO] = useState<string>(() => isoDate(new Date()));
+    const [dayLoading, setDayLoading] = useState(false);
+    const [dayTasks, setDayTasks] = useState<TaskJoin[]>([]);
+    const [dayApps, setDayApps] = useState<AppJoin[]>([]);
+
     const [progressSeries, setProgressSeries] = useState<
         { week: string; tasksCompleted: number; applicationsSubmitted: number }[]
     >([]);
@@ -302,6 +320,7 @@ export default function DashboardPage() {
         setTasksOverdue((p) => p.filter((t) => t.id !== taskId));
         setTasksWeek((p) => p.filter((t) => t.id !== taskId));
         setTasksMonth((p) => p.filter((t) => t.id !== taskId));
+        setDayTasks((p) => p.filter((t) => t.id !== taskId));
         setOpenTaskCount((n) => Math.max(0, n - 1));
     }
 
@@ -330,7 +349,7 @@ export default function DashboardPage() {
                 await loadEverything();
             }
 
-            await Promise.all([loadCalendar(), loadProgressChart()]);
+            await Promise.all([loadCalendar(), loadProgressChart(), loadDayAgenda(selectedDayISO)]);
         } catch (e: any) {
             setError(e?.message ?? "Failed to update task");
         } finally {
@@ -468,6 +487,78 @@ export default function DashboardPage() {
         }
     }
 
+    // NEW: load the selected day's tasks + app deadlines (with joins for display)
+    async function loadDayAgenda(dayISO: string) {
+        setDayLoading(true);
+        setError(null);
+
+        try {
+            const user = await getUserOrThrow();
+
+            const [tasksRes, appsRes] = await Promise.all([
+                supabase
+                    .from("tasks")
+                    .select(
+                        "id,title,due_date,done,application_id,applications(id,decision_type,platform,deadline_date,status,my_school_id,my_schools(id,schools(id,name)))"
+                    )
+                    .eq("owner_id", user.id)
+                    .eq("done", false)
+                    .eq("due_date", dayISO)
+                    .order("due_date", { ascending: true }),
+                supabase
+                    .from("applications")
+                    .select("id,decision_type,platform,deadline_date,status,my_school_id,my_schools(id,schools(id,name))")
+                    .eq("owner_id", user.id)
+                    .eq("deadline_date", dayISO)
+                    .order("created_at", { ascending: false }),
+            ]);
+
+            if (tasksRes.error) throw tasksRes.error;
+            if (appsRes.error) throw appsRes.error;
+
+            const rawTasks = (tasksRes.data ?? []) as any[];
+            const normalizedTasks: TaskJoin[] = rawTasks.map((t) => {
+                const app = firstOrNull<any>(t.applications);
+                const ms = firstOrNull<any>(app?.my_schools);
+                const school = firstOrNull<any>(ms?.schools);
+
+                return {
+                    ...t,
+                    applications: app
+                        ? {
+                            ...app,
+                            my_schools: ms
+                                ? {
+                                    ...ms,
+                                    schools: school ? { id: school.id, name: school.name } : null,
+                                }
+                                : null,
+                        }
+                        : null,
+                };
+            });
+
+            const rawApps = (appsRes.data ?? []) as any[];
+            const normalizedApps: AppJoin[] = rawApps.map((a) => {
+                const ms = firstOrNull<any>(a.my_schools);
+                const school = firstOrNull<any>(ms?.schools);
+                return {
+                    ...a,
+                    my_schools: ms
+                        ? { ...ms, schools: school ? { id: school.id, name: school.name } : null }
+                        : null,
+                };
+            });
+
+            setDayTasks(normalizedTasks);
+            setDayApps(normalizedApps);
+        } catch (e: any) {
+            setError(e?.message ?? "Failed to load day agenda");
+        } finally {
+            setDayLoading(false);
+        }
+    }
+
     async function loadProgressChart() {
         try {
             const user = await getUserOrThrow();
@@ -541,7 +632,7 @@ export default function DashboardPage() {
             const user = await getUserOrThrow();
             setEmail(user.email ?? null);
 
-            await Promise.all([loadOverviewAndBuckets(user.id), loadCalendar(), loadProgressChart()]);
+            await Promise.all([loadOverviewAndBuckets(user.id), loadCalendar(), loadProgressChart(), loadDayAgenda(selectedDayISO)]);
         } catch (e: any) {
             if (String(e?.message).toLowerCase().includes("not signed")) {
                 router.replace("/login");
@@ -562,6 +653,12 @@ export default function DashboardPage() {
         loadCalendar();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [calendarMonth]);
+
+    // When selected day changes, refresh that agenda
+    useEffect(() => {
+        loadDayAgenda(selectedDayISO);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedDayISO]);
 
     function TaskList({
         title,
@@ -615,9 +712,13 @@ export default function DashboardPage() {
                                                 <Pill kind="urgency" value={urgency} label={dueLabel(due)} />
                                             )}
 
-                                            <Link href={`/dashboard/applications/${t.application_id}`} className="text-sm underline text-gray-700">
-                                                Open
-                                            </Link>
+                                            {t.application_id ? (
+                                                <Link href={`/dashboard/applications/${t.application_id}`} className="text-sm underline text-gray-700">
+                                                    Open
+                                                </Link>
+                                            ) : (
+                                                <span className="text-sm text-gray-400">No app</span>
+                                            )}
                                         </div>
                                     </div>
                                 </li>
@@ -627,6 +728,136 @@ export default function DashboardPage() {
                 )}
 
                 {items.length > 12 && <p className="mt-3 text-sm text-gray-600">Showing 12 of {items.length}.</p>}
+            </div>
+        );
+    }
+
+    function DayAgenda() {
+        const d = selectedDayISO;
+        const label = (() => {
+            const [y, m, day] = d.split("-").map(Number);
+            const dt = new Date(y, (m ?? 1) - 1, day ?? 1);
+            return dt.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+        })();
+
+        return (
+            <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                <div className="flex items-baseline justify-between">
+                    <div>
+                        <h2 className="font-semibold">Due on {label}</h2>
+                        <p className="text-sm text-gray-600 mt-1">
+                            Click an item to open its application.
+                        </p>
+                    </div>
+                    <span className="text-sm text-gray-600">
+                        {(dayTasks?.length ?? 0) + (dayApps?.length ?? 0)} item{(dayTasks.length + dayApps.length) === 1 ? "" : "s"}
+                    </span>
+                </div>
+
+                {dayLoading ? (
+                    <div className="mt-4 text-sm text-gray-600">Loading day…</div>
+                ) : (dayTasks.length === 0 && dayApps.length === 0) ? (
+                    <div className="mt-4 text-sm text-gray-600">Nothing due this day 🎉</div>
+                ) : (
+                    <div className="mt-4 space-y-4">
+                        {/* Tasks due */}
+                        <div>
+                            <div className="flex items-center justify-between">
+                                <h3 className="font-medium">Tasks</h3>
+                                <span className="text-sm text-gray-600">{dayTasks.length}</span>
+                            </div>
+
+                            {dayTasks.length === 0 ? (
+                                <p className="mt-2 text-sm text-gray-600">No tasks due.</p>
+                            ) : (
+                                <ul className="mt-2 divide-y">
+                                    {dayTasks.map((t) => {
+                                        const collegeName = t.applications?.my_schools?.schools?.name ?? "College";
+                                        const appLabel = `${t.applications?.decision_type ?? "—"} · ${t.applications?.platform ?? "—"}`;
+                                        const due = t.due_date ?? selectedDayISO;
+                                        const disabled = busyTaskId === t.id;
+                                        const urgency = urgencyForDue(due);
+
+                                        return (
+                                            <li key={t.id} className="py-3 rounded-xl px-2 -mx-2 hover:bg-gray-50 transition-colors">
+                                                <div className="flex items-start justify-between gap-4">
+                                                    <label className="flex items-start gap-3 min-w-0 flex-1 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            className="mt-1"
+                                                            disabled={disabled}
+                                                            checked={false}
+                                                            onChange={(e) => toggleTaskFromDashboard(t.id, e.target.checked, t.title)}
+                                                        />
+                                                        <div className="min-w-0">
+                                                            <div className="font-medium break-words">{t.title}</div>
+                                                            <div className="text-sm text-gray-600">
+                                                                {collegeName} · {appLabel}
+                                                            </div>
+                                                        </div>
+                                                    </label>
+
+                                                    <div className="flex flex-col items-end gap-1 shrink-0">
+                                                        <Pill kind="urgency" value={urgency} label={dueLabel(due)} />
+                                                        {t.application_id ? (
+                                                            <Link
+                                                                href={`/dashboard/applications/${t.application_id}`}
+                                                                className="text-sm underline text-gray-700"
+                                                            >
+                                                                Open
+                                                            </Link>
+                                                        ) : (
+                                                            <span className="text-sm text-gray-400">No app</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            )}
+                        </div>
+
+                        {/* Application deadlines */}
+                        <div>
+                            <div className="flex items-center justify-between">
+                                <h3 className="font-medium">Application deadlines</h3>
+                                <span className="text-sm text-gray-600">{dayApps.length}</span>
+                            </div>
+
+                            {dayApps.length === 0 ? (
+                                <p className="mt-2 text-sm text-gray-600">No application deadlines.</p>
+                            ) : (
+                                <ul className="mt-2 divide-y">
+                                    {dayApps.map((a) => {
+                                        const collegeName = a.my_schools?.schools?.name ?? "College";
+                                        const label = `${a.decision_type ?? "—"} · ${a.platform ?? "—"}`;
+                                        return (
+                                            <li key={a.id} className="py-3 rounded-xl px-2 -mx-2 hover:bg-gray-50 transition-colors">
+                                                <div className="flex items-start justify-between gap-4">
+                                                    <div className="min-w-0">
+                                                        <div className="font-medium break-words">{collegeName}</div>
+                                                        <div className="text-sm text-gray-600">{label}</div>
+                                                    </div>
+
+                                                    <div className="flex items-center gap-2 shrink-0">
+                                                        <Pill kind="appStatus" value={a.status ?? "Unknown"} />
+                                                        <Link
+                                                            href={`/dashboard/applications/${a.id}`}
+                                                            className="text-sm underline text-gray-700"
+                                                        >
+                                                            Open
+                                                        </Link>
+                                                    </div>
+                                                </div>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
         );
     }
@@ -721,36 +952,41 @@ export default function DashboardPage() {
                 <TaskList title={bucketTitle("month")} items={tasksMonth} bucket="month" />
             </div>
 
-            {/* Calendar + chart */}
+            {/* Calendar + Day Agenda */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <DashboardCalendar
                     month={calendarMonth}
                     countsByDay={calendarCountsByDay}
+                    selectedISO={selectedDayISO}
                     onPrev={() => setCalendarMonth((m) => addMonths(m, -1))}
                     onNext={() => setCalendarMonth((m) => addMonths(m, 1))}
+                    onSelectDate={(iso) => setSelectedDayISO(iso)}
                 />
 
-                <div className="rounded-2xl border bg-white p-4 shadow-sm">
-                    <h2 className="font-semibold">Progress</h2>
-                    <p className="text-sm text-gray-600 mt-1">Tasks completed + applications submitted (weekly)</p>
+                <DayAgenda />
+            </div>
 
-                    <div className="mt-4 h-64 min-h-[256px] w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={progressSeries}>
-                                <CartesianGrid strokeDasharray="3 3" />
-                                <XAxis dataKey="week" />
-                                <YAxis allowDecimals={false} />
-                                <Tooltip />
-                                <Line type="monotone" dataKey="tasksCompleted" />
-                                <Line type="monotone" dataKey="applicationsSubmitted" />
-                            </LineChart>
-                        </ResponsiveContainer>
-                    </div>
+            {/* Progress */}
+            <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                <h2 className="font-semibold">Progress</h2>
+                <p className="text-sm text-gray-600 mt-1">Tasks completed + applications submitted (weekly)</p>
 
-                    <p className="mt-2 text-xs text-gray-500">
-                        Tip: set <code>submitted_at</code> when an application transitions to “Submitted” to power the chart.
-                    </p>
+                <div className="mt-4 h-64 min-h-[256px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={progressSeries}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="week" />
+                            <YAxis allowDecimals={false} />
+                            <Tooltip />
+                            <Line type="monotone" dataKey="tasksCompleted" />
+                            <Line type="monotone" dataKey="applicationsSubmitted" />
+                        </LineChart>
+                    </ResponsiveContainer>
                 </div>
+
+                <p className="mt-2 text-xs text-gray-500">
+                    Tip: set <code>submitted_at</code> when an application transitions to “Submitted” to power the chart.
+                </p>
             </div>
 
             {loading && <div className="text-sm text-gray-600">Loading…</div>}

@@ -15,6 +15,8 @@ type School = {
     eng_strength: string | null;
     sustainability: string | null;
     vibe_tags: string[] | null;
+    logo_url: string | null;
+    primary_color: string | null;
 };
 
 type MySchool = {
@@ -49,6 +51,18 @@ function clampRating(v: string | number | null) {
     return Math.max(0, Math.min(5, Math.round(n)));
 }
 
+// Helper to convert hex to rgba
+function hexToRgba(hex: string, alpha: number) {
+    const h = hex.trim().replace("#", "");
+    if (![3, 6].includes(h.length)) return `rgba(0,0,0,0)`;
+    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
+    if ([r, g, b].some((x) => Number.isNaN(x))) return `rgba(0,0,0,0)`;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 export default function CollegeDetailPage() {
     const supabase = useMemo(() => supabaseBrowser(), []);
     const router = useRouter();
@@ -75,11 +89,17 @@ export default function CollegeDetailPage() {
     const [editVibeFit, setEditVibeFit] = useState<string>("");
 
     // Application form state
+    const [showAddApp, setShowAddApp] = useState(false);
     const [platform, setPlatform] = useState("Common App");
     const [decisionType, setDecisionType] = useState("RD");
     const [deadline, setDeadline] = useState("");
     const [appStatus, setAppStatus] = useState("Not started");
     const [portalUrl, setPortalUrl] = useState("");
+
+    // Wikipedia state
+    const [wikiSummary, setWikiSummary] = useState<string | null>(null);
+    const [wikiLink, setWikiLink] = useState<string | null>(null);
+    const [, setWikiLoading] = useState(false);
 
     async function load() {
         setLoading(true);
@@ -96,7 +116,8 @@ export default function CollegeDetailPage() {
           id, owner_id, school_id, status, ranking_bucket, rank, notes,
           prestige, env_fit, location_fit, vibe_fit,
           schools:schools (
-            id, name, location_text, website, env_eng, eng_strength, sustainability, vibe_tags
+            id, name, location_text, website, env_eng, eng_strength, sustainability, vibe_tags,
+            logo_url, primary_color
           )
         `
                 )
@@ -108,6 +129,12 @@ export default function CollegeDetailPage() {
 
             setRow(mySchoolData as any);
 
+            // Fetch wikipedia
+            const schoolName = (mySchoolData as any)?.schools?.name;
+            if (schoolName) {
+                fetchWikipediaSummary(schoolName);
+            }
+
             // Load applications for this my_school
             const { data: appData, error: appError } = await supabase
                 .from("applications")
@@ -118,6 +145,9 @@ export default function CollegeDetailPage() {
 
             if (appError) throw appError;
             setApps((appData ?? []) as any);
+
+            // Default collapse/expand logic
+            setShowAddApp((appData ?? []).length === 0);
         } catch (e: any) {
             if (String(e?.message ?? "").toLowerCase().includes("not signed")) {
                 router.replace("/login");
@@ -126,6 +156,26 @@ export default function CollegeDetailPage() {
             setError(e?.message ?? "Failed to load college");
         } finally {
             setLoading(false);
+        }
+    }
+
+    async function fetchWikipediaSummary(schoolName: string) {
+        setWikiLoading(true);
+        try {
+            // Wikipedia REST API
+            const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(schoolName)}`;
+            const res = await fetch(url);
+            if (res.ok) {
+                const json = await res.json();
+                if (json.type === "standard" && json.extract) {
+                    setWikiSummary(json.extract);
+                    setWikiLink(json.content_urls?.desktop?.page ?? null);
+                }
+            }
+        } catch (err) {
+            // ignore
+        } finally {
+            setWikiLoading(false);
         }
     }
 
@@ -176,7 +226,8 @@ export default function CollegeDetailPage() {
           id, owner_id, school_id, status, ranking_bucket, rank, notes,
           prestige, env_fit, location_fit, vibe_fit,
           schools:schools (
-            id, name, location_text, website, env_eng, eng_strength, sustainability, vibe_tags
+            id, name, location_text, website, env_eng, eng_strength, sustainability, vibe_tags,
+            logo_url, primary_color
           )
         `
                 )
@@ -219,6 +270,10 @@ export default function CollegeDetailPage() {
             setApps((prev) => [...prev, data as any]);
             setDeadline("");
             setPortalUrl("");
+            // Collapse after adding if this was the first one, or maybe keep it open? 
+            // Let's keep it open or just clear fields. User said "can still add multiple if needed but this would be rare".
+            // So collapsing seems fine.
+            setShowAddApp(false);
         } catch (e: any) {
             setError(e?.message ?? "Failed to create application");
         }
@@ -239,29 +294,56 @@ export default function CollegeDetailPage() {
     }
 
     const school = row.schools;
+    // Header Style with primary color
+    const lightBrandBg = school?.primary_color ? hexToRgba(school.primary_color, 0.1) : "#f9fafb";
+    const headerBorder = school?.primary_color ? hexToRgba(school.primary_color, 0.2) : "transparent";
 
     return (
-        <div className="mx-auto max-w-5xl p-4 md:p-8">
-            <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                    <h1 className="text-2xl font-semibold truncate">{school?.name ?? "College"}</h1>
-                    <div className="text-sm text-gray-600 mt-1">
-                        {school?.location_text ?? "—"}
-                        {school?.website ? (
-                            <>
-                                {" · "}
-                                <a className="underline" href={school.website} target="_blank" rel="noreferrer">
-                                    Website
-                                </a>
-                            </>
-                        ) : null}
+        <div className="mx-auto max-w-5xl p-4 md:p-8 space-y-6">
+            {/* HERDER CARD */}
+            <div
+                className="rounded-3xl border p-6 md:p-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-6"
+                style={{
+                    backgroundColor: lightBrandBg,
+                    borderColor: headerBorder
+                }}
+            >
+                <div className="flex items-center gap-5">
+                    {school?.logo_url ? (
+                        <div className="h-20 w-20 shrink-0 rounded-2xl bg-white p-2 shadow-sm border overflow-hidden">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                                src={school.logo_url}
+                                alt={school.name}
+                                className="h-full w-full object-contain"
+                            />
+                        </div>
+                    ) : (
+                        <div className="h-20 w-20 shrink-0 rounded-2xl bg-white/50 flex items-center justify-center text-3xl font-bold text-gray-400 border">
+                            {school.name.substring(0, 1)}
+                        </div>
+                    )}
+
+                    <div>
+                        <h1 className="text-3xl font-bold text-gray-900">{school?.name ?? "College"}</h1>
+                        <div className="mt-2 text-gray-700 flex flex-wrap gap-x-3 gap-y-1">
+                            <span>{school?.location_text ?? "No location"}</span>
+                            {school?.website && (
+                                <>
+                                    <span>·</span>
+                                    <a className="underline hover:text-black" href={school.website} target="_blank" rel="noreferrer">
+                                        Website
+                                    </a>
+                                </>
+                            )}
+                        </div>
                     </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 self-start md:self-center">
                     {!isEditing ? (
                         <button
-                            className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+                            className="rounded-xl border border-gray-200 bg-white/80 px-4 py-2 text-sm font-medium hover:bg-white shadow-sm"
                             onClick={startEditing}
                         >
                             Edit
@@ -269,14 +351,14 @@ export default function CollegeDetailPage() {
                     ) : (
                         <>
                             <button
-                                className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+                                className="rounded-xl border border-gray-200 bg-white/80 px-4 py-2 text-sm font-medium hover:bg-white"
                                 onClick={() => setIsEditing(false)}
                                 disabled={saving}
                             >
                                 Cancel
                             </button>
                             <button
-                                className="rounded-xl bg-black text-white px-3 py-2 text-sm disabled:opacity-60"
+                                className="rounded-xl bg-black text-white px-4 py-2 text-sm font-medium disabled:opacity-60 shadow-md"
                                 onClick={saveEdits}
                                 disabled={saving}
                             >
@@ -285,165 +367,230 @@ export default function CollegeDetailPage() {
                         </>
                     )}
 
-                    <Link href="/dashboard/colleges" className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50">
+                    <Link href="/dashboard/colleges" className="rounded-xl border border-gray-200 bg-white/80 px-4 py-2 text-sm font-medium hover:bg-white shadow-sm">
                         Back
                     </Link>
                 </div>
             </div>
 
             {error ? (
-                <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+                <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
                     {error}
                 </div>
             ) : null}
 
-            {/* EDIT PANEL */}
-            {isEditing ? (
-                <div className="mt-6 rounded-2xl border bg-white p-4 md:p-6">
-                    <h2 className="font-semibold">Your inputs</h2>
-
-                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Status</div>
-                            <input
-                                className="w-full rounded-xl border px-3 py-2"
-                                value={editStatus}
-                                onChange={(e) => setEditStatus(e.target.value)}
-                            />
-                        </label>
-
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Bucket</div>
-                            <select
-                                className="w-full rounded-xl border px-3 py-2"
-                                value={editBucket}
-                                onChange={(e) => setEditBucket(e.target.value)}
-                            >
-                                {["Unbucketed", "Reach", "Match", "Safety"].map((b) => (
-                                    <option key={b} value={b}>
-                                        {b}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
-
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Rank</div>
-                            <input
-                                className="w-full rounded-xl border px-3 py-2"
-                                value={editRank}
-                                onChange={(e) => setEditRank(e.target.value)}
-                                inputMode="numeric"
-                            />
-                        </label>
-
-                        <label className="text-sm md:col-span-2">
-                            <div className="text-gray-600 mb-1">Notes</div>
-                            <textarea
-                                className="w-full rounded-xl border px-3 py-2 min-h-[110px]"
-                                value={editNotes}
-                                onChange={(e) => setEditNotes(e.target.value)}
-                            />
-                        </label>
-
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Prestige (0–5)</div>
-                            <input className="w-full rounded-xl border px-3 py-2" value={editPrestige} onChange={(e) => setEditPrestige(e.target.value)} />
-                        </label>
-
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Env fit (0–5)</div>
-                            <input className="w-full rounded-xl border px-3 py-2" value={editEnvFit} onChange={(e) => setEditEnvFit(e.target.value)} />
-                        </label>
-
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Location fit (0–5)</div>
-                            <input
-                                className="w-full rounded-xl border px-3 py-2"
-                                value={editLocationFit}
-                                onChange={(e) => setEditLocationFit(e.target.value)}
-                            />
-                        </label>
-
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Vibe fit (0–5)</div>
-                            <input className="w-full rounded-xl border px-3 py-2" value={editVibeFit} onChange={(e) => setEditVibeFit(e.target.value)} />
-                        </label>
-                    </div>
-                </div>
-            ) : null}
-
-            {/* APPLICATIONS */}
-            <div className="mt-6 rounded-2xl border bg-white p-4 md:p-6">
-                <div className="flex items-center justify-between">
-                    <h2 className="font-semibold">Applications</h2>
-                    <span className="text-sm text-gray-600">{apps.length}</span>
-                </div>
-
-                <div className="mt-4 rounded-xl border bg-gray-50 p-4">
-                    <div className="font-medium text-sm">Add application</div>
-
-                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Platform</div>
-                            <input className="w-full rounded-xl border px-3 py-2 bg-white" value={platform} onChange={(e) => setPlatform(e.target.value)} />
-                        </label>
-
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Decision type</div>
-                            <input className="w-full rounded-xl border px-3 py-2 bg-white" value={decisionType} onChange={(e) => setDecisionType(e.target.value)} />
-                        </label>
-
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Deadline</div>
-                            <input type="date" className="w-full rounded-xl border px-3 py-2 bg-white" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
-                        </label>
-
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Status</div>
-                            <input className="w-full rounded-xl border px-3 py-2 bg-white" value={appStatus} onChange={(e) => setAppStatus(e.target.value)} />
-                        </label>
-
-                        <label className="text-sm md:col-span-2">
-                            <div className="text-gray-600 mb-1">Portal URL</div>
-                            <input className="w-full rounded-xl border px-3 py-2 bg-white" value={portalUrl} onChange={(e) => setPortalUrl(e.target.value)} />
-                        </label>
-                    </div>
-
-                    <div className="mt-3">
-                        <button className="rounded-xl bg-black text-white px-3 py-2 text-sm" onClick={createApplication}>
-                            Create application
-                        </button>
-                    </div>
-                </div>
-
-                {apps.length === 0 ? (
-                    <p className="mt-4 text-sm text-gray-600">No applications yet.</p>
-                ) : (
-                    <ul className="mt-4 divide-y">
-                        {apps.map((a) => (
-                            <li key={a.id} className="py-3">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                        <div className="font-medium truncate">
-                                            <Link className="underline" href={`/dashboard/applications/${a.id}`}>
-                                                {a.decision_type ?? "—"} · {a.platform ?? "—"}
-                                            </Link>
-                                        </div>
-                                        <div className="text-sm text-gray-600 mt-1">
-                                            Deadline: {a.deadline_date ?? "—"} · Status: {a.status ?? "—"}
-                                        </div>
-                                    </div>
-                                    {a.portal_url ? (
-                                        <a className="text-sm underline" href={a.portal_url} target="_blank" rel="noreferrer">
-                                            Portal
-                                        </a>
-                                    ) : null}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* LEFT COLUMN: Stats/Inputs */}
+                <div className="md:col-span-2 space-y-6">
+                    {/* WIKIPEDIA / ABOUT */}
+                    {wikiSummary ? (
+                        <div className="rounded-2xl border bg-white p-6 shadow-sm">
+                            <h2 className="font-semibold text-lg mb-2">About</h2>
+                            <p className="text-sm text-gray-700 leading-relaxed">
+                                {wikiSummary}
+                            </p>
+                            {wikiLink && (
+                                <div className="mt-3">
+                                    <a href={wikiLink} target="_blank" rel="noreferrer" className="text-xs text-gray-500 underline hover:text-gray-800">
+                                        Read more on Wikipedia
+                                    </a>
                                 </div>
-                            </li>
-                        ))}
-                    </ul>
-                )}
+                            )}
+                        </div>
+                    ) : null}
+
+                    {/* EDIT PANEL or READ ONLY GRID */}
+                    {isEditing ? (
+                        <div className="rounded-2xl border bg-white p-6 shadow-sm">
+                            <h2 className="font-semibold text-lg mb-4">Edit Details</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <label className="text-sm">
+                                    <div className="text-gray-600 mb-1">Status</div>
+                                    <input
+                                        className="w-full rounded-xl border px-3 py-2"
+                                        value={editStatus}
+                                        onChange={(e) => setEditStatus(e.target.value)}
+                                    />
+                                </label>
+
+                                <label className="text-sm">
+                                    <div className="text-gray-600 mb-1">Bucket</div>
+                                    <select
+                                        className="w-full rounded-xl border px-3 py-2"
+                                        value={editBucket}
+                                        onChange={(e) => setEditBucket(e.target.value)}
+                                    >
+                                        {["Unbucketed", "Reach", "Match", "Safety"].map((b) => (
+                                            <option key={b} value={b}>
+                                                {b}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+
+                                <label className="text-sm">
+                                    <div className="text-gray-600 mb-1">Rank</div>
+                                    <input
+                                        className="w-full rounded-xl border px-3 py-2"
+                                        value={editRank}
+                                        onChange={(e) => setEditRank(e.target.value)}
+                                        inputMode="numeric"
+                                    />
+                                </label>
+
+                                <label className="text-sm md:col-span-2">
+                                    <div className="text-gray-600 mb-1">Notes</div>
+                                    <textarea
+                                        className="w-full rounded-xl border px-3 py-2 min-h-[110px]"
+                                        value={editNotes}
+                                        onChange={(e) => setEditNotes(e.target.value)}
+                                    />
+                                </label>
+
+                                <div className="md:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-4 mt-2">
+                                    <label className="text-sm">
+                                        <div className="text-gray-600 mb-1">Prestige (0–5)</div>
+                                        <input className="w-full rounded-xl border px-3 py-2" value={editPrestige} onChange={(e) => setEditPrestige(e.target.value)} />
+                                    </label>
+                                    <label className="text-sm">
+                                        <div className="text-gray-600 mb-1">Env fit (0–5)</div>
+                                        <input className="w-full rounded-xl border px-3 py-2" value={editEnvFit} onChange={(e) => setEditEnvFit(e.target.value)} />
+                                    </label>
+                                    <label className="text-sm">
+                                        <div className="text-gray-600 mb-1">Location fit (0–5)</div>
+                                        <input className="w-full rounded-xl border px-3 py-2" value={editLocationFit} onChange={(e) => setEditLocationFit(e.target.value)} />
+                                    </label>
+                                    <label className="text-sm">
+                                        <div className="text-gray-600 mb-1">Vibe fit (0–5)</div>
+                                        <input className="w-full rounded-xl border px-3 py-2" value={editVibeFit} onChange={(e) => setEditVibeFit(e.target.value)} />
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="rounded-2xl border bg-white p-6 shadow-sm">
+                            <h2 className="font-semibold text-lg mb-4">Details</h2>
+                            <div className="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <span className="block text-gray-500 text-xs uppercase tracking-wide">Status</span>
+                                    <span className="font-medium">{row.status}</span>
+                                </div>
+                                <div>
+                                    <span className="block text-gray-500 text-xs uppercase tracking-wide">Bucket</span>
+                                    <span className="font-medium">{row.ranking_bucket ?? "—"}</span>
+                                </div>
+                                <div>
+                                    <span className="block text-gray-500 text-xs uppercase tracking-wide">Rank</span>
+                                    <span className="font-medium">#{row.rank}</span>
+                                </div>
+                                <div className="col-span-2">
+                                    <span className="block text-gray-500 text-xs uppercase tracking-wide">Notes</span>
+                                    <p className="whitespace-pre-wrap text-gray-800">{row.notes || "—"}</p>
+                                </div>
+                                <div className="col-span-2 border-t pt-4 grid grid-cols-4 gap-2 text-center">
+                                    <div>
+                                        <span className="block text-gray-400 text-[10px] uppercase">Prestige</span>
+                                        <span className="font-semibold text-base">{row.prestige ?? "—"}</span>
+                                    </div>
+                                    <div>
+                                        <span className="block text-gray-400 text-[10px] uppercase">Env</span>
+                                        <span className="font-semibold text-base">{row.env_fit ?? "—"}</span>
+                                    </div>
+                                    <div>
+                                        <span className="block text-gray-400 text-[10px] uppercase">Loc</span>
+                                        <span className="font-semibold text-base">{row.location_fit ?? "—"}</span>
+                                    </div>
+                                    <div>
+                                        <span className="block text-gray-400 text-[10px] uppercase">Vibe</span>
+                                        <span className="font-semibold text-base">{row.vibe_fit ?? "—"}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* RIGHT COLUMN: Applications */}
+                <div className="md:col-span-1 space-y-6">
+                    <div className="rounded-2xl border bg-white p-5 shadow-sm">
+                        <div className="flex items-center justify-between mb-4">
+                            <h2 className="font-semibold text-lg">Applications</h2>
+                            <span className="text-xs font-medium bg-gray-100 text-gray-600 px-2 py-1 rounded-full">
+                                {apps.length}
+                            </span>
+                        </div>
+
+                        {apps.length === 0 && !showAddApp ? (
+                            <p className="text-sm text-gray-500 mb-4">No applications created yet.</p>
+                        ) : (
+                            <ul className="mb-4 space-y-3">
+                                {apps.map((a) => (
+                                    <li key={a.id} className="rounded-xl border bg-gray-50/50 p-3 hover:bg-gray-50 transition">
+                                        <Link href={`/dashboard/applications/${a.id}`} className="block">
+                                            <div className="font-medium text-blue-600 hover:underline text-sm mb-1">
+                                                {a.decision_type ?? "Application"}
+                                                {a.platform ? ` via ${a.platform}` : ""}
+                                            </div>
+                                            <div className="text-xs text-gray-600 flex justify-between">
+                                                <span>{a.status}</span>
+                                                <span>Due: {a.deadline_date ?? "—"}</span>
+                                            </div>
+                                        </Link>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+
+                        {!showAddApp ? (
+                            <button
+                                onClick={() => setShowAddApp(true)}
+                                className="w-full rounded-xl border border-dashed border-gray-300 py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 hover:text-black transition"
+                            >
+                                + Add application
+                            </button>
+                        ) : (
+                            <div className="rounded-xl border bg-gray-50 p-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                                <div className="flex items-center justify-between mb-3">
+                                    <div className="font-medium text-sm">New Application</div>
+                                    <button onClick={() => setShowAddApp(false)} className="text-xs text-gray-500 hover:text-black">
+                                        Cancel
+                                    </button>
+                                </div>
+
+                                <div className="space-y-3">
+                                    <label className="block text-sm">
+                                        <div className="text-xs text-gray-500 mb-1">Platform</div>
+                                        <input className="w-full rounded-lg border px-2 py-1.5 text-sm bg-white" value={platform} onChange={(e) => setPlatform(e.target.value)} />
+                                    </label>
+
+                                    <label className="block text-sm">
+                                        <div className="text-xs text-gray-500 mb-1">Decision type</div>
+                                        <input className="w-full rounded-lg border px-2 py-1.5 text-sm bg-white" value={decisionType} onChange={(e) => setDecisionType(e.target.value)} />
+                                    </label>
+
+                                    <label className="block text-sm">
+                                        <div className="text-xs text-gray-500 mb-1">Deadline</div>
+                                        <input type="date" className="w-full rounded-lg border px-2 py-1.5 text-sm bg-white" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+                                    </label>
+
+                                    <label className="block text-sm">
+                                        <div className="text-xs text-gray-500 mb-1">Status</div>
+                                        <input className="w-full rounded-lg border px-2 py-1.5 text-sm bg-white" value={appStatus} onChange={(e) => setAppStatus(e.target.value)} />
+                                    </label>
+
+                                    <label className="block text-sm">
+                                        <div className="text-xs text-gray-500 mb-1">Portal URL</div>
+                                        <input className="w-full rounded-lg border px-2 py-1.5 text-sm bg-white" value={portalUrl} onChange={(e) => setPortalUrl(e.target.value)} />
+                                    </label>
+
+                                    <button className="w-full rounded-lg bg-black text-white py-2 text-sm font-medium mt-2" onClick={createApplication}>
+                                        Create
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
         </div>
     );

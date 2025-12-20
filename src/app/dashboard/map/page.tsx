@@ -270,11 +270,28 @@ export default function SchoolsMapPage() {
                     {/* Side panel */}
                     <div className="rounded-2xl border bg-white p-4 shadow-sm space-y-4">
                         <div>
-                            <h2 className="font-semibold">Summary</h2>
-                            <div className="mt-2 text-sm text-gray-700">
-                                <div>Mapped: {pins.length}</div>
-                                <div>Missing coords: {missingCoords.length}</div>
-                            </div>
+                            <h2 className="font-semibold">Mapped Schools</h2>
+                            <p className="text-sm text-gray-600 mb-3">
+                                Corresponding to the numbered pins on the map.
+                            </p>
+                            <ul className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
+                                {pins.map((p) => (
+                                    <li key={p.mySchoolId} className="text-sm border-b pb-2 last:border-0">
+                                        <button
+                                            className="w-full text-left hover:bg-gray-50 rounded px-1 -mx-1 py-0.5 transition"
+                                            onClick={() => setSelected(p)}
+                                        >
+                                            <span className="font-semibold mr-1">#{p.rank}</span>
+                                            <span className="underline decoration-gray-300 underline-offset-2">
+                                                {p.name}
+                                            </span>
+                                        </button>
+                                        <div className="text-xs text-gray-500 pl-6">
+                                            {p.locationText ?? "—"}
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
                         </div>
 
                         {missingCoords.length > 0 && (
@@ -304,10 +321,7 @@ export default function SchoolsMapPage() {
                             </div>
                         )}
 
-                        <div className="text-xs text-gray-500">
-                            If you want, we can add a tiny “Admin: set coordinates” tool later, or batch-fill
-                            coordinates via a one-time script.
-                        </div>
+
                     </div>
                 </div>
             )}

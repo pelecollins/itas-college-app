@@ -158,6 +158,44 @@ function hexToRgba(hex: string, alpha: number) {
 }
 // ----------------------------------
 
+function StarRating({
+    label,
+    value,
+    onChange,
+}: {
+    label: string;
+    value: number;
+    onChange: (val: number) => void;
+}) {
+    // 1..5 stars
+    const stars = [1, 2, 3, 4, 5];
+
+    return (
+        <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                {label}
+            </span>
+            <div className="flex items-center gap-1">
+                {stars.map((star) => {
+                    const active = star <= value;
+                    return (
+                        <button
+                            key={star}
+                            type="button"
+                            onClick={() => onChange(active && value === star ? 0 : star)}
+                            className={`text-2xl leading-none transition-colors ${active ? "text-yellow-400" : "text-gray-200 hover:text-gray-300"
+                                }`}
+                            title={`${star} star${star === 1 ? "" : "s"}`}
+                        >
+                            ★
+                        </button>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
 function SortableMySchoolRow({
     row,
     onRemove,
@@ -267,7 +305,10 @@ function SortableMySchoolRow({
 
                         {/* Editable status */}
                         <select
-                            className="rounded-full border px-2 py-0.5 text-xs bg-white/70 hover:bg-white"
+                            className={`rounded-full border px-2 py-0.5 text-xs font-medium cursor-pointer transition hover:opacity-90 ${pillClass(
+                                "status",
+                                row.status
+                            )}`}
                             value={row.status}
                             onChange={(e) => onPatch(row.id, { status: e.target.value })}
                             title="Status"
@@ -282,7 +323,10 @@ function SortableMySchoolRow({
 
                         {/* Editable bucket */}
                         <select
-                            className="rounded-full border px-2 py-0.5 text-xs bg-white/70 hover:bg-white"
+                            className={`rounded-full border px-2 py-0.5 text-xs font-medium cursor-pointer transition hover:opacity-90 ${pillClass(
+                                "bucket",
+                                row.ranking_bucket ?? "Unbucketed"
+                            )}`}
                             value={row.ranking_bucket ?? ""}
                             onChange={(e) =>
                                 onPatch(row.id, { ranking_bucket: e.target.value ? e.target.value : null })
@@ -295,13 +339,6 @@ function SortableMySchoolRow({
                             <option value="Safety">Safety</option>
                         </select>
 
-                        {/* pills (for visual consistency) */}
-                        <Pill kind="status" value={row.status} />
-                        {row.ranking_bucket ? (
-                            <Pill kind="bucket" value={row.ranking_bucket} />
-                        ) : (
-                            <Pill kind="bucket" value="unbucketed" label="Unbucketed" />
-                        )}
                         {s?.env_eng && <Pill kind="env" value={s.env_eng} label={`EnvE: ${s.env_eng}`} />}
                     </div>
 
@@ -411,14 +448,14 @@ export default function CollegesPage() {
     const [selectedSchoolId, setSelectedSchoolId] = useState<string>("");
 
     // add-to-list fields
-    const [status, setStatus] = useState("Considering");
+    const [status, setStatus] = useState("");
     const [bucket, setBucket] = useState<string>(""); // Reach/Match/Safety optional
     const [notes, setNotes] = useState("");
 
-    const [prestige, setPrestige] = useState<string>("");
-    const [envFit, setEnvFit] = useState<string>("");
-    const [locationFit, setLocationFit] = useState<string>("");
-    const [vibeFit, setVibeFit] = useState<string>("");
+    const [prestige, setPrestige] = useState<number>(0);
+    const [envFit, setEnvFit] = useState<number>(0);
+    const [locationFit, setLocationFit] = useState<number>(0);
+    const [vibeFit, setVibeFit] = useState<number>(0);
 
     // optional: add custom school to catalog
     const [customName, setCustomName] = useState("");
@@ -537,10 +574,10 @@ export default function CollegesPage() {
                 ranking_bucket: bucket.trim() || null,
                 rank: nextRank,
                 notes: notes.trim() || null,
-                prestige: clampRating(prestige),
-                env_fit: clampRating(envFit),
-                location_fit: clampRating(locationFit),
-                vibe_fit: clampRating(vibeFit),
+                prestige: prestige || null,
+                env_fit: envFit || null,
+                location_fit: locationFit || null,
+                vibe_fit: vibeFit || null,
             };
 
             const { error } = await supabase.from("my_schools").insert(payload);
@@ -548,13 +585,13 @@ export default function CollegesPage() {
 
             // reset add fields
             setSelectedSchoolId("");
-            setStatus("Considering");
+            setStatus("");
             setBucket("");
             setNotes("");
-            setPrestige("");
-            setEnvFit("");
-            setLocationFit("");
-            setVibeFit("");
+            setPrestige(0);
+            setEnvFit(0);
+            setLocationFit(0);
+            setVibeFit(0);
 
             await loadMyList();
         } catch (e: any) {
@@ -817,7 +854,15 @@ export default function CollegesPage() {
                         </div>
 
                         <form onSubmit={addSelectedToMyList} className="space-y-3">
-                            <select className="w-full rounded-xl border px-3 py-2" value={status} onChange={(e) => setStatus(e.target.value)}>
+                            <select
+                                className={`w-full rounded-xl border px-3 py-2 ${!status ? "text-gray-500" : "text-gray-900"
+                                    }`}
+                                value={status}
+                                onChange={(e) => setStatus(e.target.value)}
+                            >
+                                <option value="" disabled>
+                                    Status (optional)
+                                </option>
                                 <option>Considering</option>
                                 <option>Building</option>
                                 <option>Ready</option>
@@ -826,18 +871,23 @@ export default function CollegesPage() {
                                 <option>Decision</option>
                             </select>
 
-                            <select className="w-full rounded-xl border px-3 py-2" value={bucket} onChange={(e) => setBucket(e.target.value)}>
+                            <select
+                                className={`w-full rounded-xl border px-3 py-2 ${!bucket ? "text-gray-500" : "text-gray-900"
+                                    }`}
+                                value={bucket}
+                                onChange={(e) => setBucket(e.target.value)}
+                            >
                                 <option value="">Bucket (optional)</option>
                                 <option value="Reach">Reach</option>
                                 <option value="Match">Match</option>
                                 <option value="Safety">Safety</option>
                             </select>
 
-                            <div className="grid grid-cols-2 gap-2">
-                                <input className="rounded-xl border px-3 py-2" placeholder="Prestige (0–5)" value={prestige} onChange={(e) => setPrestige(e.target.value)} />
-                                <input className="rounded-xl border px-3 py-2" placeholder="Env fit (0–5)" value={envFit} onChange={(e) => setEnvFit(e.target.value)} />
-                                <input className="rounded-xl border px-3 py-2" placeholder="Location (0–5)" value={locationFit} onChange={(e) => setLocationFit(e.target.value)} />
-                                <input className="rounded-xl border px-3 py-2" placeholder="Vibe (0–5)" value={vibeFit} onChange={(e) => setVibeFit(e.target.value)} />
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <StarRating label="Prestige" value={prestige} onChange={setPrestige} />
+                                <StarRating label="Env Fit" value={envFit} onChange={setEnvFit} />
+                                <StarRating label="Location" value={locationFit} onChange={setLocationFit} />
+                                <StarRating label="Vibe" value={vibeFit} onChange={setVibeFit} />
                             </div>
 
                             <textarea

@@ -6,7 +6,24 @@ import Link from "next/link";
 import { supabaseBrowser } from "@/lib/supabase/browser";
 import { getUserOrThrow } from "@/lib/auth/getUser";
 
-type SchoolMini = { id: string; name: string };
+// Helper to convert hex to rgba
+function hexToRgba(hex: string, alpha: number) {
+    const h = hex.trim().replace("#", "");
+    if (![3, 6].includes(h.length)) return `rgba(0,0,0,0)`;
+    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
+    if ([r, g, b].some((x) => Number.isNaN(x))) return `rgba(0,0,0,0)`;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+type SchoolMini = {
+    id: string;
+    name: string;
+    logo_url?: string | null;
+    primary_color?: string | null;
+};
 
 type MySchoolMini = {
     id: string;
@@ -77,6 +94,8 @@ function normalizeApplication(raw: any): ApplicationRow {
                 ? {
                     id: String(schoolRaw.id),
                     name: String(schoolRaw.name),
+                    logo_url: schoolRaw.logo_url ?? null,
+                    primary_color: schoolRaw.primary_color ?? null,
                 }
                 : null,
         }
@@ -144,7 +163,9 @@ export default function ApplicationDetailPage() {
           id,
           schools (
             id,
-            name
+            name,
+            logo_url,
+            primary_color
           )
         )
       `
@@ -176,7 +197,9 @@ export default function ApplicationDetailPage() {
           id,
           schools (
             id,
-            name
+            name,
+            logo_url,
+            primary_color
           )
         )
       `
@@ -400,121 +423,161 @@ export default function ApplicationDetailPage() {
         );
     }
 
-    const schoolName = app.my_schools?.schools?.name ?? "College";
+    const school = app.my_schools?.schools;
+    const schoolName = school?.name ?? "College";
+    const logoUrl = school?.logo_url;
+    const primaryColor = school?.primary_color;
+
+    // Header Style
+    const lightBrandBg = primaryColor ? hexToRgba(primaryColor, 0.1) : "#f9fafb";
+    const headerBorder = primaryColor ? hexToRgba(primaryColor, 0.2) : "transparent";
 
     return (
-        <div className="mx-auto max-w-5xl p-4 md:p-8">
-            <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                    <h1 className="text-2xl font-semibold truncate">{schoolName}</h1>
-                    <div className="text-sm text-gray-600 mt-1">
-                        Created: {friendlyDateTime(app.created_at)}
-                        {app.portal_url ? (
-                            <>
-                                {" · "}
-                                <a className="underline" href={app.portal_url} target="_blank" rel="noreferrer">
-                                    Portal
-                                </a>
-                            </>
-                        ) : null}
+        <div className="mx-auto max-w-5xl p-4 md:p-8 space-y-6">
+            {/* HEADER CARD */}
+            <div
+                className="rounded-3xl border p-6 flex flex-col md:flex-row items-center justify-between gap-6"
+                style={{
+                    backgroundColor: lightBrandBg,
+                    borderColor: headerBorder
+                }}
+            >
+                <div className="flex items-center gap-5 w-full md:w-auto">
+                    {logoUrl ? (
+                        <div className="h-16 w-16 shrink-0 rounded-xl bg-white p-2 shadow-sm border overflow-hidden">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                                src={logoUrl}
+                                alt={schoolName}
+                                className="h-full w-full object-contain"
+                            />
+                        </div>
+                    ) : (
+                        <div className="h-16 w-16 shrink-0 rounded-xl bg-white/50 flex items-center justify-center text-2xl font-bold text-gray-400 border">
+                            {schoolName.substring(0, 1)}
+                        </div>
+                    )}
+
+                    <div className="min-w-0">
+                        <h1 className="text-2xl font-bold text-gray-900 truncate">{schoolName}</h1>
+                        <div className="text-sm text-gray-600 mt-1">
+                            Application created: {friendlyDateTime(app.created_at)}
+                            {app.portal_url && (
+                                <>
+                                    {" · "}
+                                    <a className="underline hover:text-black" href={app.portal_url} target="_blank" rel="noreferrer">
+                                        Portal
+                                    </a>
+                                </>
+                            )}
+                        </div>
                     </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                    <Link href="/dashboard/colleges" className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50">
-                        Colleges
+                <div className="flex items-center gap-2 self-start md:self-center w-full md:w-auto justify-end">
+                    <Link href={`/dashboard/colleges/${app.my_school_id}`} className="rounded-xl border border-gray-200 bg-white/80 px-4 py-2 text-sm font-medium hover:bg-white shadow-sm">
+                        View College
                     </Link>
-                    <button className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50" onClick={() => router.back()}>
+                    <button className="rounded-xl border border-gray-200 bg-white/80 px-4 py-2 text-sm font-medium hover:bg-white shadow-sm" onClick={() => router.back()}>
                         Back
                     </button>
                 </div>
             </div>
 
             {error ? (
-                <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{error}</div>
+                <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{error}</div>
             ) : null}
 
-            <div className="mt-6 rounded-2xl border bg-white p-4 md:p-6">
-                <h2 className="font-semibold">Application details</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="rounded-2xl border bg-white p-4 md:p-6 shadow-sm">
+                    <h2 className="font-semibold text-lg mb-4">Application details</h2>
 
-                <form className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4" onSubmit={saveApplicationEdits}>
-                    <label className="text-sm">
-                        <div className="text-gray-600 mb-1">Platform</div>
-                        <input className="w-full rounded-xl border px-3 py-2" value={platform} onChange={(e) => setPlatform(e.target.value)} />
-                    </label>
+                    <form className="space-y-4" onSubmit={saveApplicationEdits}>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label className="text-sm">
+                                <div className="text-gray-600 mb-1">Platform</div>
+                                <input className="w-full rounded-xl border px-3 py-2" value={platform} onChange={(e) => setPlatform(e.target.value)} />
+                            </label>
 
-                    <label className="text-sm">
-                        <div className="text-gray-600 mb-1">Decision type</div>
-                        <input className="w-full rounded-xl border px-3 py-2" value={decisionType} onChange={(e) => setDecisionType(e.target.value)} />
-                    </label>
+                            <label className="text-sm">
+                                <div className="text-gray-600 mb-1">Decision type</div>
+                                <input className="w-full rounded-xl border px-3 py-2" value={decisionType} onChange={(e) => setDecisionType(e.target.value)} />
+                            </label>
 
-                    <label className="text-sm">
-                        <div className="text-gray-600 mb-1">Deadline</div>
-                        <input type="date" className="w-full rounded-xl border px-3 py-2" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
-                    </label>
+                            <label className="text-sm">
+                                <div className="text-gray-600 mb-1">Deadline</div>
+                                <input type="date" className="w-full rounded-xl border px-3 py-2" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+                            </label>
 
-                    <label className="text-sm">
-                        <div className="text-gray-600 mb-1">Status</div>
-                        <input className="w-full rounded-xl border px-3 py-2" value={status} onChange={(e) => setStatus(e.target.value)} />
-                    </label>
+                            <label className="text-sm">
+                                <div className="text-gray-600 mb-1">Status</div>
+                                <input className="w-full rounded-xl border px-3 py-2" value={status} onChange={(e) => setStatus(e.target.value)} />
+                            </label>
 
-                    <label className="text-sm md:col-span-2">
-                        <div className="text-gray-600 mb-1">Portal URL</div>
-                        <input className="w-full rounded-xl border px-3 py-2" value={portalUrl} onChange={(e) => setPortalUrl(e.target.value)} />
-                    </label>
+                            <label className="text-sm md:col-span-2">
+                                <div className="text-gray-600 mb-1">Portal URL</div>
+                                <input className="w-full rounded-xl border px-3 py-2" value={portalUrl} onChange={(e) => setPortalUrl(e.target.value)} />
+                            </label>
+                        </div>
 
-                    <div className="md:col-span-2">
-                        <button className="rounded-xl bg-black text-white px-3 py-2 text-sm disabled:opacity-60" disabled={savingApp} type="submit">
-                            {savingApp ? "Saving…" : "Save changes"}
-                        </button>
-                    </div>
-                </form>
-            </div>
+                        <div className="pt-2">
+                            <button className="w-full md:w-auto rounded-xl bg-black text-white px-6 py-2 text-sm font-medium disabled:opacity-60" disabled={savingApp} type="submit">
+                                {savingApp ? "Saving…" : "Save changes"}
+                            </button>
+                        </div>
+                    </form>
+                </div>
 
-            <div className="mt-6 rounded-2xl border bg-white p-4 md:p-6">
-                <h2 className="font-semibold">Tasks</h2>
+                <div className="rounded-2xl border bg-white p-4 md:p-6 shadow-sm">
+                    <h2 className="font-semibold text-lg mb-4">Tasks</h2>
 
-                <form onSubmit={addTask} className="mt-4 rounded-xl border bg-gray-50 p-4">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <label className="text-sm md:col-span-2">
-                            <div className="text-gray-600 mb-1">Task title</div>
-                            <input className="w-full rounded-xl border px-3 py-2 bg-white" value={title} onChange={(e) => setTitle(e.target.value)} />
-                        </label>
+                    <form onSubmit={addTask} className="rounded-xl border bg-gray-50 p-4 mb-4">
+                        <div className="grid grid-cols-1 gap-3">
+                            <label className="text-sm">
+                                <div className="text-gray-600 mb-1">Task title</div>
+                                <input placeholder="e.g. Request transcript" className="w-full rounded-xl border px-3 py-2 bg-white" value={title} onChange={(e) => setTitle(e.target.value)} />
+                            </label>
 
-                        <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Due date</div>
-                            <input type="date" className="w-full rounded-xl border px-3 py-2 bg-white" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-                        </label>
-                    </div>
+                            <div className="flex gap-2">
+                                <label className="text-sm flex-1">
+                                    <div className="text-gray-600 mb-1">Due date</div>
+                                    <input type="date" className="w-full rounded-xl border px-3 py-2 bg-white" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+                                </label>
+                                <div className="flex items-end">
+                                    <button className="rounded-xl bg-black text-white px-4 py-2 text-sm font-medium mb-[1px]" type="submit">
+                                        Add
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
 
-                    <div className="mt-3">
-                        <button className="rounded-xl bg-black text-white px-3 py-2 text-sm" type="submit">
-                            Add task
-                        </button>
-                    </div>
-                </form>
+                    {tasks.length === 0 ? (
+                        <p className="text-sm text-gray-500 text-center py-4">No tasks yet.</p>
+                    ) : (
+                        <ul className="divide-y border-t border-gray-100">
+                            {tasks.map((t) => (
+                                <li key={t.id} className="py-3 flex items-start justify-between gap-3 group">
+                                    <button className="text-left min-w-0" onClick={() => toggleTask(t.id, !t.done)} title="Toggle complete">
+                                        <div className="flex items-start gap-3">
+                                            <div className={`mt-1 h-4 w-4 rounded border flex items-center justify-center transition-colors ${t.done ? "bg-black border-black" : "bg-white border-gray-300"}`}>
+                                                {t.done && <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+                                            </div>
+                                            <div>
+                                                <span className={`font-medium block ${t.done ? "line-through text-gray-400" : "text-gray-900"}`}>{t.title}</span>
+                                                {t.due_date && <span className="text-xs text-gray-500 block mt-0.5">Due: {t.due_date}</span>}
+                                            </div>
+                                        </div>
+                                    </button>
 
-                {tasks.length === 0 ? (
-                    <p className="mt-4 text-sm text-gray-600">No tasks yet.</p>
-                ) : (
-                    <ul className="mt-4 divide-y">
-                        {tasks.map((t) => (
-                            <li key={t.id} className="py-3 flex items-start justify-between gap-3">
-                                <button className="text-left min-w-0" onClick={() => toggleTask(t.id, !t.done)} title="Toggle complete">
-                                    <div className="flex items-center gap-2">
-                                        <span className={`inline-flex h-4 w-4 rounded border ${t.done ? "bg-black" : "bg-white"}`} />
-                                        <span className={`font-medium truncate ${t.done ? "line-through text-gray-500" : ""}`}>{t.title}</span>
-                                    </div>
-                                    <div className="text-sm text-gray-600 mt-1">Due: {t.due_date ?? "—"}</div>
-                                </button>
-
-                                <button className="text-sm underline text-gray-600 hover:text-black" onClick={() => deleteTask(t.id)}>
-                                    Delete
-                                </button>
-                            </li>
-                        ))}
-                    </ul>
-                )}
+                                    <button className="text-xs text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity px-2 py-1" onClick={() => deleteTask(t.id)}>
+                                        Delete
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
             </div>
         </div>
     );

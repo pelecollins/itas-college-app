@@ -449,8 +449,8 @@ export default function ApplicationDetailPage() {
                     </label>
 
                     <label className="text-sm">
-                        <div className="text-gray-600 mb-1">Deadline (YYYY-MM-DD)</div>
-                        <input className="w-full rounded-xl border px-3 py-2" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+                        <div className="text-gray-600 mb-1">Deadline</div>
+                        <input type="date" className="w-full rounded-xl border px-3 py-2" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
                     </label>
 
                     <label className="text-sm">
@@ -482,8 +482,8 @@ export default function ApplicationDetailPage() {
                         </label>
 
                         <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Due date (YYYY-MM-DD)</div>
-                            <input className="w-full rounded-xl border px-3 py-2 bg-white" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+                            <div className="text-gray-600 mb-1">Due date</div>
+                            <input type="date" className="w-full rounded-xl border px-3 py-2 bg-white" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
                         </label>
                     </div>
 

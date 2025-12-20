@@ -395,8 +395,8 @@ export default function CollegeDetailPage() {
                         </label>
 
                         <label className="text-sm">
-                            <div className="text-gray-600 mb-1">Deadline (YYYY-MM-DD)</div>
-                            <input className="w-full rounded-xl border px-3 py-2 bg-white" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+                            <div className="text-gray-600 mb-1">Deadline</div>
+                            <input type="date" className="w-full rounded-xl border px-3 py-2 bg-white" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
                         </label>
 
                         <label className="text-sm">

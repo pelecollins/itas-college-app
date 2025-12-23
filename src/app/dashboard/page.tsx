@@ -71,6 +71,7 @@ export default function DashboardPage() {
     const [tasksMonth, setTasksMonth] = useState<TaskJoin[]>([]);
 
     // Calendar & Day Agenda
+    const [viewMode, setViewMode] = useState<"month" | "upcoming">("month");
     const [calendarMonth, setCalendarMonth] = useState<Date>(() => startOfMonth(new Date()));
     const [calendarCountsByDay, setCalendarCountsByDay] = useState<Record<string, CalendarCounts>>({});
 
@@ -223,11 +224,25 @@ export default function DashboardPage() {
     async function loadCalendar() {
         try {
             const user = await getUserOrThrow();
-            const mStart = startOfMonth(calendarMonth);
-            const mEnd = endOfMonth(calendarMonth);
 
-            const startISO = isoDate(mStart);
-            const endISO = isoDate(mEnd);
+            // Calculate grid range exactly as the UI does
+            let gridStart: Date;
+            if (viewMode === "upcoming") {
+                const d = new Date();
+                const dow = d.getDay();
+                gridStart = addDays(d, -dow);
+            } else {
+                const monthStart = startOfMonth(calendarMonth);
+                const d = new Date(monthStart);
+                const dow = d.getDay();
+                gridStart = addDays(d, -dow);
+            }
+
+            // Grid is always 6 weeks (42 days)
+            const gridEnd = addDays(gridStart, 42);
+
+            const startISO = isoDate(gridStart);
+            const endISO = isoDate(gridEnd);
 
             const { data: tasks, error: tErr } = await supabase
                 .from("tasks")
@@ -428,11 +443,11 @@ export default function DashboardPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Effect: Calendar Month Change
+    // Effect: Calendar View Changes
     useEffect(() => {
         loadCalendar();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [calendarMonth]);
+    }, [calendarMonth, viewMode]);
 
     // Effect: Day Selection Change
     useEffect(() => {
@@ -495,10 +510,12 @@ export default function DashboardPage() {
                 <div className="lg:col-span-8 h-[500px]">
                     <DashboardCalendar
                         month={calendarMonth}
+                        viewMode={viewMode}
                         countsByDay={calendarCountsByDay}
                         selectedISO={selectedDayISO}
                         onPrev={() => setCalendarMonth(cm => addDays(cm, -30))} // Approximation, but startOfMonth fixes it
                         onNext={() => setCalendarMonth(cm => addDays(cm, 32))}
+                        onViewModeChange={(m) => setViewMode(m)}
                         onSelectDate={(iso) => setSelectedDayISO(iso)}
                     />
                 </div>
